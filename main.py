@@ -11,6 +11,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field
+from smog_queue import router as smog_router, init_queue, enqueue_candidate
+from smog_orchestrator import Event, detect_candidates
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger('smog')
@@ -23,6 +25,7 @@ EVENTS = {
     'bullish_fvg_mitigated', 'bearish_fvg_mitigated',
 }
 app = FastAPI(title='SMOG TradingView Webhook Receiver', docs_url=None, redoc_url=None)
+app.include_router(smog_router)
 
 class Alert(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -62,6 +65,7 @@ def startup():
     if not os.environ.get('WEBHOOK_SECRET'):
         raise RuntimeError('WEBHOOK_SECRET not configured')
     initialize()
+    init_queue()
 
 @app.get('/health')
 def health():
@@ -104,6 +108,25 @@ async def tradingview(request: Request):
         log.exception('Failed to persist TradingView event')
         raise HTTPException(status_code=503, detail='Database unavailable')
     if inserted:
+        # Replay recent persisted alerts. Unique candidate keys make retries safe.
+        # Failure to queue does not undo the successfully stored source alert.
+        try:
+            with psycopg.connect(db_url(), connect_timeout=5) as conn:
+                rows = conn.execute('''
+                    SELECT id, event, bar_time, price FROM tv_events
+                    WHERE bar_time BETWEEN %s AND %s
+                    ORDER BY id
+                ''', (bar_time_ms - 30 * 60_000, bar_time_ms + 30 * 60_000)).fetchall()
+            events = [Event(*row) for row in rows if row[1] in {
+                'og_long', 'og_short', 'internal_bullish_choch',
+                'internal_bearish_choch', 'bullish_fvg_formed',
+                'bearish_fvg_formed', 'bullish_fvg_mitigated',
+                'bearish_fvg_mitigated'}]
+            for candidate in detect_candidates(events):
+                if candidate.triggered_by_id == inserted[0]:
+                    enqueue_candidate(candidate.to_payload())
+        except Exception:
+            log.exception('SMOG queue processing failed; source alert remains stored')
         log.info('stored id=%s event=%s bar_time=%s', inserted[0], payload.event, bar_time_ms)
         return JSONResponse({'status': 'stored', 'id': inserted[0]}, status_code=200)
     log.info('duplicate event=%s bar_time=%s', payload.event, bar_time_ms)
