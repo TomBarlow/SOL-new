@@ -15,6 +15,7 @@ from smog_queue import router as smog_router, init_queue, enqueue_candidate
 from smog_events import router as smog_events_router
 from smog_orchestrator import Event, detect_candidates
 from smog_adx_filter import evaluate_adx
+from smog_blofin_auth import check_demo_auth
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger('smog')
@@ -69,6 +70,9 @@ def startup():
         raise RuntimeError('WEBHOOK_SECRET not configured')
     initialize()
     init_queue()
+    # One read-only demo authentication probe at startup. Never log secrets or balances.
+    import threading
+    threading.Thread(target=lambda: log.info('blofin_demo_auth=%s', check_demo_auth()), daemon=True).start()
     with psycopg.connect(db_url(), connect_timeout=5) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS smog_adx_audit (
