@@ -28,11 +28,11 @@ class WakeUpTests(unittest.TestCase):
         ])
         self.assertEqual(len(result), 1)
 
-    def test_no_wake_after_mitigation(self):
-        self.assertEqual(detect_candidates([
+    def test_mitigation_of_another_gap_does_not_globally_suppress(self):
+        self.assertEqual(len(detect_candidates([
             e(1, "bullish_fvg_formed", 0), e(2, "bullish_fvg_mitigated", 1),
             e(3, "og_long", 2), e(4, "internal_bullish_choch", 3)
-        ]), [])
+        ])), 1)
 
     def test_no_mixed_direction(self):
         self.assertEqual(detect_candidates([
