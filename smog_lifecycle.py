@@ -13,7 +13,7 @@ from psycopg.types.json import Jsonb
 from smog_demo_execution import (
     ExecutionBlocked, accepted_id, amend_protective_stop, cancel_order,
     client_action_id, demo_instrument, demo_read, place_emergency_stop,
-    submit_partial_close,
+    submit_partial_close, submit_emergency_close,
 )
 from smog_fvg_geometry import inspect_fvg
 
@@ -257,6 +257,11 @@ def _reconcile_actions(conn_factory, pos):
                                     WHEN %s='stop_breakeven' THEN true ELSE be_moved END
                                 WHERE intent_id=%s
                             """, (target, key, intent_id))
+            elif key == "emergency_exit":
+                detail = _order_detail(order_id, client_action_id(setup_id, key))
+                if detail and detail.get("state") in ("filled", "partially_filled"):
+                    with conn_factory() as conn:
+                        _finish_action(conn, action_id, "confirmed", str(detail["orderId"]))
             elif key == "entry_cancel":
                 detail = _order_detail(order_id)
                 if detail and detail.get("state") in ("filled","canceled","cancelled","expired"):
@@ -289,9 +294,9 @@ def _bos_after_entry(conn_factory, pos):
     with conn_factory() as conn:
         return conn.execute("""
             SELECT bar_time, received_at FROM tv_events
-            WHERE event=%s AND received_at >= %s
+            WHERE event=%s AND received_at >= %s AND bar_time >= %s
             ORDER BY received_at LIMIT 1
-        """, (event, pos["opened_at"])).fetchone()
+        """, (event, pos["opened_at"], int(pos["opened_at"].timestamp() * 1000) - 60_000)).fetchone()
 
 
 def _price_at_four_r(pos, market_price):
@@ -415,11 +420,25 @@ def manage_positions(conn_factory):
                 """, (size, live.get("positionId"), intent_id))
             stop = _safe_tpsl(direction, size, pos["current_stop"])
             if stop is None:
-                _transmit(conn_factory, intent_id, "emergency_stop",
-                          lambda: place_emergency_stop(
-                              pos["setup_id"], direction, size, pos["current_stop"]),
-                          field="tpslId", target=pos["current_stop"])
-                log.error("Live demo position %s requires verified protective stop", intent_id)
+                age = (datetime.now(timezone.utc) - pos["opened_at"]).total_seconds()
+                if age < 15:
+                    continue  # Attached SL may take a few seconds to appear.
+                with conn_factory() as conn:
+                    emergency = conn.execute("""
+                        SELECT created_at FROM smog_management_actions
+                        WHERE intent_id=%s AND action_key='emergency_stop'
+                    """, (intent_id,)).fetchone()
+                if emergency is None:
+                    _transmit(conn_factory, intent_id, "emergency_stop",
+                              lambda: place_emergency_stop(
+                                  pos["setup_id"], direction, size, pos["current_stop"]),
+                              field="tpslId", target=pos["current_stop"])
+                elif (datetime.now(timezone.utc) - emergency[0]).total_seconds() > 20:
+                    _transmit(conn_factory, intent_id, "emergency_exit",
+                              lambda: submit_emergency_close(
+                                  pos["setup_id"], direction, size),
+                              target=size)
+                log.error("Unprotected demo position %s: emergency protection/exit pending", intent_id)
                 continue
             if not pos["bos_at"]:
                 bos = _bos_after_entry(conn_factory, pos)
@@ -462,6 +481,9 @@ def manage_positions(conn_factory):
                 candidate = _new_trailing_fvg(conn_factory, pos, tick)
                 if candidate:
                     formed, target = candidate
+                    if (direction == "long" and target >= price
+                            or direction == "short" and target <= price):
+                        continue
                     action_key = "stop_trail_" + str(formed)
                     sent = _transmit(conn_factory, intent_id, action_key,
                                      lambda: amend_protective_stop(
