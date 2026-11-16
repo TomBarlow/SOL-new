@@ -19,6 +19,10 @@ READ_PATHS = {
     "positions": "/api/v1/account/positions",
     "orders": "/api/v1/trade/orders-pending",
     "fills": "/api/v1/trade/fills-history",
+    "position_mode": "/api/v1/account/position-mode",
+    "margin_mode": "/api/v1/account/margin-mode",
+    "tpsl": "/api/v1/trade/orders-tpsl-pending",
+    "order_history": "/api/v1/trade/orders-history",
 }
 WRITE_PATHS = {"/api/v1/trade/order", "/api/v1/trade/cancel-order"}
 
@@ -140,3 +144,17 @@ def demo_read(endpoint: str, params: dict | None = None) -> dict:
     if str(result.get("code")) != "0":
         raise ValueError("BloFin read-only query rejected")
     return result
+
+
+def demo_instrument() -> dict:
+    """Read exchange contract specifications; no trading or account mutation."""
+    _demo_only()
+    with urlopen(Request(DEMO + "/api/v1/market/instruments?instId=SOL-USDT",
+                         method="GET"), timeout=8) as response:
+        payload = json.load(response)
+    if str(payload.get("code")) != "0":
+        raise ValueError("Instrument lookup rejected")
+    matches = [x for x in payload.get("data", []) if x.get("instId") == "SOL-USDT"]
+    if len(matches) != 1:
+        raise ValueError("SOL-USDT instrument not uniquely found")
+    return matches[0]
