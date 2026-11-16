@@ -23,6 +23,7 @@ READ_PATHS = {
     "margin_mode": "/api/v1/account/margin-mode",
     "tpsl": "/api/v1/trade/orders-tpsl-pending",
     "order_history": "/api/v1/trade/orders-history",
+    "order_detail": "/api/v1/trade/order-detail",
 }
 WRITE_PATHS = {"/api/v1/trade/order", "/api/v1/trade/cancel-order"}
 
