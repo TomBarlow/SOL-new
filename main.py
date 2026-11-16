@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from smog_queue import router as smog_router, init_queue, enqueue_candidate
 from smog_events import router as smog_events_router
 from smog_orchestrator import Event, detect_candidates
+from smog_adx_filter import evaluate_adx
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger('smog')
@@ -68,6 +69,15 @@ def startup():
         raise RuntimeError('WEBHOOK_SECRET not configured')
     initialize()
     init_queue()
+    with psycopg.connect(db_url(), connect_timeout=5) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS smog_adx_audit (
+                candidate_key TEXT PRIMARY KEY,
+                candidate JSONB NOT NULL,
+                assessment JSONB NOT NULL,
+                assessed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
 
 @app.get('/health')
 def health():
@@ -126,7 +136,19 @@ async def tradingview(request: Request):
                 'bearish_fvg_mitigated'}]
             for candidate in detect_candidates(events):
                 if candidate.triggered_by_id == inserted[0]:
-                    enqueue_candidate(candidate.to_payload())
+                    result = evaluate_adx(candidate.asof_bar_time_ms)
+                    with psycopg.connect(db_url(), connect_timeout=5) as audit_conn:
+                        audit_conn.execute("""
+                            INSERT INTO smog_adx_audit(candidate_key, candidate, assessment)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (candidate_key) DO NOTHING
+                        """, (candidate.key, Jsonb(candidate.to_payload()), Jsonb(result)))
+                    if result["status"] == "PASS":
+                        enriched = candidate.to_payload()
+                        enriched["adx_prefilter"] = result
+                        enqueue_candidate(enriched)
+                    else:
+                        log.info("ADX candidate=%s status=%s", candidate.key, result["status"])
         except Exception:
             log.exception('SMOG queue processing failed; source alert remains stored')
         log.info('stored id=%s event=%s bar_time=%s', inserted[0], payload.event, bar_time_ms)
