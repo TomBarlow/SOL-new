@@ -1,4 +1,4 @@
-"""SMOG demo futures execution foundation. Order transmission intentionally disabled.
+"""SMOG demo futures execution with bounded orders and reconciled lifecycle actions.
 
 Validates trade plans and constructs deterministic demo order requests, but
 NEVER submits them. Read-only reconciliation is allowed on the demo host.
@@ -24,8 +24,12 @@ READ_PATHS = {
     "tpsl": "/api/v1/trade/orders-tpsl-pending",
     "order_history": "/api/v1/trade/orders-history",
     "order_detail": "/api/v1/trade/order-detail",
+    "tpsl_detail": "/api/v1/trade/order-tpsl-detail",
+    "positions_history": "/api/v1/account/positions-history",
+    "tpsl_history": "/api/v1/trade/orders-tpsl-history",
 }
-WRITE_PATHS = {"/api/v1/trade/order", "/api/v1/trade/cancel-order"}
+WRITE_PATHS = {"/api/v1/trade/order", "/api/v1/trade/cancel-order",
+               "/api/v1/trade/amend-tpsl", "/api/v1/trade/order-tpsl"}
 
 
 class ExecutionBlocked(Exception):
@@ -93,7 +97,88 @@ def _signed_post(path: str, body: dict) -> dict:
         result = json.load(response)
     if str(result.get("code")) != "0":
         raise ValueError("BloFin rejected demo order request")
+    for item in normalized_rows(result):
+        if str(item.get("code", "0")) != "0":
+            raise ValueError("BloFin rejected individual demo order action")
     return result
+
+
+def normalized_rows(result: dict) -> list[dict]:
+    """BloFin order responses are lists, while some TPSL responses are dicts."""
+    data = result.get("data")
+    if isinstance(data, dict):
+        return [data]
+    if isinstance(data, list) and all(isinstance(row, dict) for row in data):
+        return data
+    return []
+
+
+def accepted_id(result: dict, field: str = "orderId") -> str:
+    rows = normalized_rows(result)
+    if len(rows) != 1 or str(rows[0].get("code", "0")) != "0":
+        raise ValueError("Ambiguous individual BloFin response")
+    identifier = str(rows[0].get(field) or "")
+    if not identifier.isdigit():
+        raise ValueError("Missing valid BloFin identifier")
+    return identifier
+
+
+def client_action_id(setup_id: str, action: str) -> str:
+    return "smog" + hashlib.sha256((setup_id + "|" + action).encode()).hexdigest()[:28]
+
+
+def _exchange_id(value: str) -> str:
+    value = str(value or "")
+    if not value.isdigit() or len(value) > 64:
+        raise ValueError("Invalid exchange identifier")
+    return value
+
+
+def submit_partial_close(setup_id: str, direction: str, size) -> dict:
+    """Market reduce-only close of the preapproved demo quantity."""
+    q = _positive(size)
+    if q % _positive(demo_instrument()["lotSize"]) != 0:
+        raise ExecutionBlocked("Partial close violates contract lot increment")
+    if direction not in ("long", "short"):
+        raise ValueError("Invalid direction")
+    return _signed_post("/api/v1/trade/order", {
+        "instId": "SOL-USDT", "marginMode": "cross", "positionSide": "net",
+        "side": "sell" if direction == "long" else "buy",
+        "orderType": "market", "size": str(q), "reduceOnly": "true",
+        "clientOrderId": client_action_id(setup_id, "partial_close"),
+    })
+
+
+def amend_protective_stop(tpsl_id: str, price, request_id: str) -> dict:
+    """Modify a verified existing standalone protective stop."""
+    stop = _positive(price)
+    tick = _positive(demo_instrument()["tickSize"])
+    if stop % tick:
+        raise ExecutionBlocked("Stop violates contract tick increment")
+    if not request_id.startswith("smog") or len(request_id) > 32:
+        raise ValueError("Invalid action idempotency key")
+    return _signed_post("/api/v1/trade/amend-tpsl", {
+        "instId": "SOL-USDT", "tpslId": _exchange_id(tpsl_id),
+        "requestId": request_id,
+        "newSlTriggerPrice": str(stop), "newSlOrderPrice": "-1",
+    })
+
+
+def place_emergency_stop(setup_id: str, direction: str, size, price) -> dict:
+    """Protect an existing demo position if its attached SL is absent."""
+    q, stop = _positive(size), _positive(price)
+    spec = demo_instrument()
+    if q % _positive(spec["lotSize"]) or stop % _positive(spec["tickSize"]):
+        raise ExecutionBlocked("Emergency stop violates contract increments")
+    if direction not in ("long", "short"):
+        raise ValueError("Invalid direction")
+    return _signed_post("/api/v1/trade/order-tpsl", {
+        "instId": "SOL-USDT", "marginMode": "cross", "positionSide": "net",
+        "side": "sell" if direction == "long" else "buy", "size": str(q),
+        "slTriggerPrice": str(stop), "slOrderPrice": "-1",
+        "slTriggerPriceType": "last", "reduceOnly": "true",
+        "clientOrderId": client_action_id(setup_id, "emergency_stop"),
+    })
 
 
 def check_contract_and_account(proposal: dict, max_notional_usdt: Decimal = Decimal("100")) -> None:
