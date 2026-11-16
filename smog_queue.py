@@ -67,6 +67,28 @@ def enqueue_candidate(candidate: dict) -> bool:
     return row is not None
 
 
+@router.get("/monitor")
+def monitor():
+    """Stable, non-sensitive queue wake-up signal for Hermes --monitor-url.
+
+    No credentials or candidate details are exposed. Response is byte-identical
+    while the ready queue is unchanged. Monitoring does not claim a task.
+    """
+    with _db() as conn:
+        row = conn.execute("""
+            SELECT COUNT(*), COALESCE(MAX(id), 0)
+            FROM smog_tasks
+            WHERE status = 'pending'
+               OR (status = 'leased' AND lease_until < now())
+        """).fetchone()
+    count, latest_id = row
+    return Response(
+        content=f"ready:{count}:latest:{latest_id}" if count else "idle",
+        media_type="text/plain",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/next")
 def next_task(authorization: str | None = Header(default=None)):
     _auth(authorization)
