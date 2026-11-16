@@ -51,6 +51,20 @@ def init_queue():
                 CHECK (status IN ('pending','leased','decided','expired'))
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS smog_execution_intents (
+                id BIGSERIAL PRIMARY KEY,
+                setup_id TEXT UNIQUE NOT NULL REFERENCES smog_tasks(candidate_key),
+                trade_plan JSONB NOT NULL,
+                status TEXT NOT NULL DEFAULT 'blocked',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                exchange_order_id TEXT,
+                error_code TEXT,
+                CHECK (status IN ('blocked','ready','submitting','submitted',
+                                  'rejected','cancelled','filled','unknown'))
+            )
+        """)
 
 
 def enqueue_candidate(candidate: dict) -> bool:
@@ -150,4 +164,13 @@ def submit_decision(body: Decision, authorization: str | None = Header(default=N
                 decided_at=now(), lease_until=NULL
             WHERE candidate_key=%s
         """, (Jsonb(incoming), body.setup_id))
+        if body.decision == "TAKE":
+            # Durable, deduplicated execution intent. Never call an exchange
+            # inside the decision transaction. Explicitly blocked until
+            # execution validation and independent worker activation.
+            conn.execute("""
+                INSERT INTO smog_execution_intents(setup_id, trade_plan, status)
+                VALUES (%s, %s, 'blocked')
+                ON CONFLICT (setup_id) DO NOTHING
+            """, (body.setup_id, Jsonb(body.trade_plan)))
     return {"status": "recorded", "execution_allowed": False}
