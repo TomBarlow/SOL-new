@@ -169,6 +169,7 @@ def reconcile_orders():
 def run_worker():
     """Event-driven wake with periodic recovery for notifications lost on restart."""
     import time
+    last_audit = 0.0
     while True:
         try:
             with _connect() as conn:
@@ -178,6 +179,10 @@ def run_worker():
                     while process_one():
                         pass
                     reconcile_orders()
+                    if time.monotonic() - last_audit >= 60:
+                        from smog_audit import settle_observations
+                        settle_observations(_connect)
+                        last_audit = time.monotonic()
                     for _ in conn.notifies(timeout=5, stop_after=1):
                         pass
         except Exception:
