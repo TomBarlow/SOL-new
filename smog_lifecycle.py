@@ -262,10 +262,14 @@ def _reconcile_actions(conn_factory, pos):
                         if key.startswith("stop_"):
                             conn.execute("""
                                 UPDATE smog_managed_positions
-                                SET current_stop=%s, be_moved=CASE
-                                    WHEN %s='stop_breakeven' THEN true ELSE be_moved END
+                                SET current_stop=%s,
+                                    be_moved=CASE WHEN %s='stop_breakeven'
+                                              THEN true ELSE be_moved END,
+                                    trailing_gap_ms=CASE WHEN %s LIKE 'stop_trail_%%'
+                                      THEN CAST(substring(%s from 12) AS BIGINT)
+                                      ELSE trailing_gap_ms END
                                 WHERE intent_id=%s
-                            """, (target, key, intent_id))
+                            """, (target, key, key, key, intent_id))
             elif key == "emergency_exit":
                 detail = _order_detail(order_id, client_action_id(setup_id, key))
                 if detail and detail.get("state") in ("filled", "partially_filled"):
@@ -497,17 +501,11 @@ def manage_positions(conn_factory):
                             or direction == "short" and target <= price):
                         continue
                     action_key = "stop_trail_" + str(formed)
-                    sent = _transmit(conn_factory, intent_id, action_key,
-                                     lambda: amend_protective_stop(
-                                         str(stop["tpslId"]), target,
-                                         client_action_id(pos["setup_id"], action_key)),
-                                     field="tpslId", target=target)
-                    if sent:
-                        with conn_factory() as conn:
-                            conn.execute("""
-                                UPDATE smog_managed_positions
-                                SET trailing_gap_ms=%s WHERE intent_id=%s
-                            """, (formed, intent_id))
+                    _transmit(conn_factory, intent_id, action_key,
+                              lambda: amend_protective_stop(
+                                  str(stop["tpslId"]), target,
+                                  client_action_id(pos["setup_id"], action_key)),
+                              field="tpslId", target=target)
             _book_fills(conn_factory, pos)
         except Exception:
             log.exception("Demo position management failed for intent %s", intent_id)
