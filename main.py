@@ -102,6 +102,11 @@ def startup():
                 assessed_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
         """)
+    # A closed TradingView bar can precede BloFin's confirmed OHLC response.
+    # Recover recently unverified candidates without blocking webhook replies.
+    from smog_prefilter_retry import run_prefilter_retries
+    threading.Thread(target=run_prefilter_retries,
+                     name="smog-prefilter-retry", daemon=True).start()
 
 @app.get('/health')
 def health():
@@ -181,12 +186,14 @@ async def tradingview(request: Request):
                         enriched["fvg"] = geometry
                         enqueue_candidate(enriched)
                     else:
-                        log.info("SMOG prefilter candidate=%s adx=%s fvg=%s",
+                        log.info("SMOG prefilter candidate=%s adx=%s fvg=%s reason=%s",
                                  candidate.key, result["status"],
-                                 geometry["status"] + ("_MITIGATED" if geometry.get("mitigated") else ""))
+                                 geometry["status"] + ("_MITIGATED" if geometry.get("mitigated") else ""),
+                                 geometry.get("reason", "none"))
         except Exception:
             log.exception('SMOG queue processing failed; source alert remains stored')
         log.info('stored id=%s event=%s bar_time=%s', inserted[0], payload.event, bar_time_ms)
         return JSONResponse({'status': 'stored', 'id': inserted[0]}, status_code=200)
     log.info('duplicate event=%s bar_time=%s', payload.event, bar_time_ms)
     return {'status': 'duplicate'}
+
