@@ -93,6 +93,10 @@ def _position():
               and _decimal(p.get("positions", "0")) != 0]
     if len(active) > 1:
         raise ExecutionBlocked("Multiple active SOL positions: manual investigation required")
+    if active and (active[0].get("positionSide") != "net"
+                   or active[0].get("marginMode") != "cross"
+                   or _decimal(active[0].get("leverage") or "0") > 3):
+        raise ExecutionBlocked("Unexpected demo position mode or leverage")
     return active[0] if active else None
 
 
@@ -192,7 +196,12 @@ def reconcile_entries(conn_factory):
                         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         ON CONFLICT (intent_id) DO UPDATE
                         SET initial_size = GREATEST(
-                            smog_managed_positions.initial_size, EXCLUDED.initial_size)
+                            smog_managed_positions.initial_size, EXCLUDED.initial_size),
+                            entry_price = CASE
+                              WHEN smog_managed_positions.partial_filled = false
+                              THEN EXCLUDED.entry_price
+                              ELSE smog_managed_positions.entry_price
+                            END
                     """, (intent_id, setup_id, plan["direction"],
                           filled, filled, price, plan["stop"], plan["stop"],
                           detail.get("positionId")))
@@ -476,7 +485,10 @@ def manage_positions(conn_factory):
                                   client_action_id(pos["setup_id"], "stop_breakeven")),
                               field="tpslId", target=entry)
                     continue
-            if pos["be_moved"] and pos["bos_bar_ms"] and four_r:
+            if pos["be_moved"] and pos["bos_bar_ms"] and (
+                    (price - pos["entry_price"] if direction == "long"
+                     else pos["entry_price"] - price)
+                    > 4 * abs(pos["entry_price"] - pos["initial_stop"])):
                 tick = _decimal(demo_instrument()["tickSize"])
                 candidate = _new_trailing_fvg(conn_factory, pos, tick)
                 if candidate:
