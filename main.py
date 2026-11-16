@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field
 from smog_queue import router as smog_router, init_queue, enqueue_candidate
+from smog_events import router as smog_events_router
 from smog_orchestrator import Event, detect_candidates
 
 logging.basicConfig(level=logging.INFO)
@@ -26,6 +27,7 @@ EVENTS = {
 }
 app = FastAPI(title='SMOG TradingView Webhook Receiver', docs_url=None, redoc_url=None)
 app.include_router(smog_router)
+app.include_router(smog_events_router)
 
 class Alert(BaseModel):
     model_config = ConfigDict(extra='forbid')
