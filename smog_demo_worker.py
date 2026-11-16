@@ -39,9 +39,13 @@ def promote_fresh_intent(conn, setup_id: str, plan: dict):
     except (ValueError, TypeError, KeyError):
         return False
     row = conn.execute("""
-      SELECT created_at FROM smog_tasks WHERE candidate_key=%s
+      SELECT created_at, payload FROM smog_tasks WHERE candidate_key=%s
     """, (setup_id,)).fetchone()
     if not row or (datetime.now(timezone.utc) - row[0]).total_seconds() > 180:
+        return False
+    fvg = row[1].get("fvg") or {}
+    if (fvg.get("status") != "VERIFIED" or fvg.get("mitigated") is not False
+            or fvg.get("direction") != plan["direction"]):
         return False
     conn.execute("""
       UPDATE smog_execution_intents
