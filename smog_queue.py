@@ -137,6 +137,7 @@ class Decision(BaseModel):
     narrative: str = Field(min_length=1, max_length=10000)
     model: Literal["z-ai/glm-5.3"]
     trade_plan: dict | None = None
+    rule_eval: dict | None = None
 
 
 @router.post("/decisions")
@@ -146,12 +147,26 @@ def submit_decision(body: Decision, authorization: str | None = Header(default=N
         raise HTTPException(422, "TAKE requires a trade_plan")
     with _db() as conn:
         row = conn.execute("""
-            SELECT status, decision FROM smog_tasks
+            SELECT status, decision, payload FROM smog_tasks
             WHERE candidate_key=%s FOR UPDATE
         """, (body.setup_id,)).fetchone()
         if row is None:
             raise HTTPException(404, "Unknown setup")
-        status, prior = row
+        status, prior, candidate = row
+        if body.decision == "TAKE":
+            # A same-direction OG, CHoCH and FVG within the wake-up window
+            # cannot establish that the gap belongs to the CHoCH displacement.
+            # Hermes must explicitly attest to the actual alert candles and
+            # its candle-based structural assessment before demo execution.
+            alignment = (body.rule_eval or {}).get("fvg_choch_displacement")
+            signal_bars = candidate.get("signal_bars") or {}
+            if (not isinstance(alignment, dict)
+                    or alignment.get("status") != "PASS"
+                    or alignment.get("choch_bar_ms") != signal_bars.get("internal_choch")
+                    or alignment.get("fvg_bar_ms") != signal_bars.get("fvg_formed")
+                    or not isinstance(alignment.get("evidence"), str)
+                    or not alignment["evidence"].strip()):
+                raise HTTPException(422, "TAKE requires evidenced FVG/CHoCH displacement alignment")
         incoming = body.model_dump(mode="json")
         if status == "decided":
             if prior == incoming:
