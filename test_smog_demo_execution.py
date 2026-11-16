@@ -24,8 +24,9 @@ class DemoExecutionTests(unittest.TestCase):
                 prepare_limit_order("x", *args)
 
     def test_writes_always_blocked(self):
+        proposal = prepare_limit_order("test", "long", "150", "1", "149")
         with self.assertRaises(ExecutionBlocked):
-            submit_order({})
+            submit_order(proposal)
         with self.assertRaises(ExecutionBlocked):
             cancel_order("123")
 
