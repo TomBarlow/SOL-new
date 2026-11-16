@@ -71,5 +71,9 @@ def inspect_fvg(formed_bar_ms: int, asof_bar_ms: int, direction: str) -> dict:
         candles = fetch_closed("1m", asof_bar_ms + INTERVAL_MS)
         return reconstruct(candles, formed_bar_ms, asof_bar_ms, direction)
     except (ValueError, OSError, KeyError, TypeError, IndexError) as exc:
-        return {"status": "UNVERIFIED", "reason": type(exc).__name__,
+        # Preserve the specific geometry/data failure for diagnostics. The
+        # exception strings here describe read-only candle validation only.
+        reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+        return {"status": "UNVERIFIED", "reason": reason[:160],
                 "formation_bar_ms": formed_bar_ms, "asof_bar_ms": asof_bar_ms}
+
