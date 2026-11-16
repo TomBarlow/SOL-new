@@ -112,17 +112,10 @@ def detect_candidates(events: Iterable[Event], window_ms: int = WINDOW_MS) -> li
                 if not ogs or not chochs:
                     continue
                 og, choch = ogs[-1], chochs[-1]
-                # A displacement FVG is formed on or before its internal CHoCH.
-                # Its TradingView alert may arrive later than that CHoCH alert.
-                if e.bar_time_ms > choch.bar_time_ms:
-                    continue
+                # This is a conservative wake-up only. Exact CHoCH
+                # displacement and FVG mitigation are verified downstream.
                 if max(og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms) - min(
                         og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms) > window_ms:
-                    continue
-                if any(x.event == MITIGATED[direction]
-                       and e.bar_time_ms <= x.bar_time_ms <= max(
-                           og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms)
-                       for x in relevant):
                     continue
                 if current.id not in (e.id, og.id, choch.id):
                     continue
