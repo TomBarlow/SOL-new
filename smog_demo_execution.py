@@ -63,13 +63,60 @@ def prepare_limit_order(setup_id: str, direction: str, price, size, stop,
             "slTriggerPriceType": "last", "clientOrderId": client_id}
 
 
-def submit_order(_proposal):
-    """Hard fail-closed: no automated demo or live trading in this phase."""
-    raise ExecutionBlocked("Order submission disabled pending explicit activation and tests")
+def _signed_post(path: str, body: dict) -> dict:
+    """Send to a fixed demo endpoint only, with explicit execution enablement."""
+    _demo_only()
+    if path not in WRITE_PATHS:
+        raise ExecutionBlocked("Write endpoint not allowlisted")
+    if os.environ.get("SMOG_DEMO_ORDER_ENABLED") != "true":
+        raise ExecutionBlocked("Demo order transmission disabled")
+    timestamp, nonce = str(int(time.time() * 1000)), str(uuid4())
+    raw = json.dumps(body, separators=(",", ":"), sort_keys=True)
+    message = f"{path}POST{timestamp}{nonce}{raw}".encode()
+    digest = hmac.new(os.environ["BLOFIN_API_SECRET"].encode(),
+                      message, hashlib.sha256).hexdigest().encode()
+    headers = {
+        "ACCESS-KEY": os.environ["BLOFIN_API_KEY"],
+        "ACCESS-SIGN": base64.b64encode(digest).decode(),
+        "ACCESS-TIMESTAMP": timestamp,
+        "ACCESS-NONCE": nonce,
+        "ACCESS-PASSPHRASE": os.environ["BLOFIN_PASSPHRASE"],
+        "Content-Type": "application/json",
+    }
+    with urlopen(Request(DEMO + path, data=raw.encode(), headers=headers,
+                         method="POST"), timeout=8) as response:
+        result = json.load(response)
+    if str(result.get("code")) != "0":
+        raise ValueError("BloFin rejected demo order request")
+    return result
 
 
-def cancel_order(_order_id):
-    raise ExecutionBlocked("Order cancellation disabled pending explicit activation and tests")
+def submit_order(proposal: dict) -> dict:
+    """Real demo exchange order; intentionally gated off by default."""
+    allowed = {"instId", "marginMode", "positionSide", "side", "orderType",
+               "price", "size", "slTriggerPrice", "slOrderPrice",
+               "slTriggerPriceType", "clientOrderId"}
+    if set(proposal) != allowed or proposal["instId"] != "SOL-USDT":
+        raise ValueError("Unexpected order fields or instrument")
+    if proposal["orderType"] != "limit" or proposal["marginMode"] != "isolated":
+        raise ValueError("Unsupported order mode")
+    direction = proposal["positionSide"]
+    expected = prepare_limit_order("validation", direction, proposal["price"],
+                                   proposal["size"], proposal["slTriggerPrice"])
+    for key in ("side", "slOrderPrice", "slTriggerPriceType"):
+        if proposal[key] != expected[key]:
+            raise ValueError("Invalid order parameters")
+    if not str(proposal["clientOrderId"]).startswith("smog"):
+        raise ValueError("Invalid client order id")
+    return _signed_post("/api/v1/trade/order", proposal)
+
+
+def cancel_order(order_id: str) -> dict:
+    """Real demo exchange cancel, gated off by default."""
+    if not order_id or not order_id.isdigit() or len(order_id) > 64:
+        raise ValueError("Invalid exchange order ID")
+    return _signed_post("/api/v1/trade/cancel-order",
+                        {"instId": "SOL-USDT", "orderId": order_id})
 
 
 def demo_read(endpoint: str, params: dict | None = None) -> dict:
