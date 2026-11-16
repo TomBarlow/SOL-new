@@ -90,6 +90,8 @@ def startup():
         except Exception as exc:
             log.warning('blofin_demo_preflight_instrument=ERROR:%s', type(exc).__name__)
     threading.Thread(target=demo_preflight, daemon=True).start()
+    from smog_demo_worker import run_worker
+    threading.Thread(target=run_worker, name="smog-demo-worker", daemon=True).start()
     with psycopg.connect(db_url(), connect_timeout=5) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS smog_adx_audit (
