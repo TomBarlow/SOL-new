@@ -58,13 +58,20 @@ def process_one():
         return False
     with _connect() as conn:
         row = conn.execute("""
-          SELECT id, setup_id, trade_plan
+          SELECT id, setup_id, trade_plan, created_at
           FROM smog_execution_intents WHERE status='ready'
           ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1
         """).fetchone()
         if not row:
             return False
-        intent_id, setup_id, plan = row
+        intent_id, setup_id, plan, created_at = row
+        if (datetime.now(timezone.utc) - created_at).total_seconds() > 180:
+            conn.execute("""
+              UPDATE smog_execution_intents SET status='rejected',
+                  error_code='STALE_SETUP', updated_at=now()
+              WHERE id=%s
+            """, (intent_id,))
+            return True
         conn.execute("""
           UPDATE smog_execution_intents SET status='submitting',
               updated_at=now() WHERE id=%s
