@@ -7,7 +7,6 @@ is advisory because an undecided task must survive a bridge restart.
 import hmac
 import json
 import os
-from datetime import datetime, timezone
 
 import psycopg
 from fastapi import APIRouter, Header, HTTPException
@@ -52,12 +51,17 @@ def _stream(last_event_id):
         # psycopg notifies() waits on the DB socket; timeout sends SSE keepalives.
         # NOTIFY payload is an ID only; always re-read eligibility from the DB.
         while True:
-            notified = False
-            for _ in conn.notifies(timeout=20, stop_after=1):
-                notified = True
-            if notified:
-                for task_id, key in _ready(conn):
-                    yield _frame(task_id, key)
+            notified_ids = [n.payload for n in conn.notifies(timeout=20, stop_after=1)]
+            if notified_ids:
+                for notification_id in notified_ids:
+                    if not notification_id.isdecimal():
+                        continue
+                    row = conn.execute("""
+                        SELECT id, candidate_key FROM smog_tasks
+                        WHERE id=%s AND status='pending'
+                    """, (int(notification_id),)).fetchone()
+                    if row:
+                        yield _frame(*row)
             else:
                 yield ": heartbeat\n\n"
 
