@@ -36,6 +36,12 @@ class Candidate:
     fvg_id: int
     triggered_by_id: int
     asof_bar_time_ms: int
+    og_bar_time_ms: int
+    choch_bar_time_ms: int
+    fvg_bar_time_ms: int
+    og_price: float
+    choch_price: float
+    fvg_alert_price: float
 
     def to_payload(self) -> dict:
         return {
@@ -44,14 +50,27 @@ class Candidate:
             "candidate_key": self.key,
             "direction": self.direction,
             "event_ids": {"og": self.og_id, "internal_choch": self.choch_id, "fvg_formed": self.fvg_id},
+            "signal_bars": {
+                "og": self.og_bar_time_ms,
+                "internal_choch": self.choch_bar_time_ms,
+                "fvg_formed": self.fvg_bar_time_ms,
+            },
+            "signal_prices": {
+                "og": self.og_price,
+                "internal_choch": self.choch_price,
+                "fvg_formed": self.fvg_alert_price,
+            },
             "triggered_by_event_id": self.triggered_by_id,
             "asof_bar_time_ms": self.asof_bar_time_ms,
             "status": "UNVERIFIED",
             "execution_allowed": False,
             "hermes_tasks": [
                 "Retrieve closed 1m/5m candles and ADX at evaluation time",
-                "Verify OG and internal CHoCH refer to same directional move",
-                "Verify FVG boundaries, mitigation state and associated CHoCH leg",
+                "Use signal_bars to identify the specific official OG, internal CHoCH and FVG alert candles",
+                "Verify the bullish/bearish FVG was created by the displacement that makes the internal CHoCH; reject an unrelated same-direction gap",
+                "The three alerts appearing within 30 minutes is only a wake-up condition, not proof of structural association",
+                "Verify FVG boundaries and mitigation state, and wait for a pullback into this exact gap before entry",
+                "If same-displacement membership or the internal break cannot be substantiated from closed candles, return WAIT or SKIP, never TAKE",
                 "Check 50% retracement, entry, stop and risk rules",
                 "Return TAKE, WAIT or SKIP with reasons and supporting evidence"
             ],
@@ -99,7 +118,11 @@ def detect_candidates(events: Iterable[Event], window_ms: int = WINDOW_MS) -> li
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
-                candidates.append(Candidate(key, direction, *ids, current.id,
-                                            current.bar_time_ms))
+                candidates.append(Candidate(
+                    key, direction, *ids, current.id, current.bar_time_ms,
+                    og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms,
+                    og.price, choch.price, e.price
+                ))
                 break
     return candidates
+
