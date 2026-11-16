@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import psycopg
 from smog_demo_execution import (
-    ExecutionBlocked, prepare_limit_order, submit_order, demo_read
+    ExecutionBlocked, accepted_id, prepare_limit_order, submit_order, demo_instrument
 )
 log = logging.getLogger("smog.demo.worker")
 
@@ -96,15 +96,37 @@ def process_one():
                 or current_fvg.get("identity") != fvg.get("identity")
                 or current_fvg.get("mitigated") is not False):
             raise ExecutionBlocked("FVG mitigated or geometry unavailable at order time")
+        from smog_adx_filter import evaluate_adx, fetch_closed
+        tick = Decimal(str(demo_instrument()["tickSize"]))
+        price = Decimal(str(plan["entry"]))
+        lower = Decimal(str(current_fvg["lower"]))
+        upper = Decimal(str(current_fvg["upper"]))
+        midpoint = (lower + upper) / 2
+        if ((plan["direction"] == "long" and not lower <= price <= midpoint)
+                or (plan["direction"] == "short" and not midpoint <= price <= upper)):
+            raise ExecutionBlocked("Entry must be in the deeper 50% of the identified FVG")
+        if price % tick:
+            raise ExecutionBlocked("Entry violates exchange price increment")
+        closed_ms = (int(time.time() * 1000) // 60_000) * 60_000
+        current_adx = evaluate_adx(closed_ms, off_choch=False)
+        if current_adx["status"] != "PASS":
+            raise ExecutionBlocked("ADX is not verified below threshold at entry")
+        candles = fetch_closed("1m", closed_ms)
+        by_start = {c.start_ms: c for c in candles}
+        reference = by_start.get(fvg["formation_bar_ms"] - 120_000)
+        if reference is None:
+            raise ExecutionBlocked("FVG reference candle unavailable")
+        stop = Decimal(str(plan["stop"]))
+        if (plan["direction"] == "long" and stop > Decimal(str(reference.low)) - tick
+                or plan["direction"] == "short" and stop < Decimal(str(reference.high)) + tick):
+            raise ExecutionBlocked("Stop must sit beyond the FVG reference candle")
+        if fvg["formation_bar_ms"] > task[0]["signal_bars"]["internal_choch"]:
+            raise ExecutionBlocked("FVG formed after the internal CHoCH")
         proposal = prepare_limit_order(
-            setup_id, plan["direction"], plan["entry"],
-            plan["size"], plan["stop"]
+            setup_id, plan["direction"], price, plan["size"], stop
         )
         result = submit_order(proposal)
-        data = result.get("data") or {}
-        order_id = data.get("orderId")
-        if not order_id:
-            raise ValueError("Successful response omitted order ID")
+        order_id = accepted_id(result)
         with _connect() as conn:
             conn.execute("""
               UPDATE smog_execution_intents
@@ -136,39 +158,12 @@ def process_one():
 
 
 def reconcile_orders():
-    """Resolve known demo order states without guessing fills or retrying sends."""
+    """Independent exchange order and live demo position reconciliation."""
     if not enabled():
         return
-    with _connect() as conn:
-        intents = conn.execute("""
-          SELECT id, setup_id, status, exchange_order_id
-          FROM smog_execution_intents
-          WHERE status IN ('submitted', 'unknown')
-          ORDER BY id LIMIT 50
-        """).fetchall()
-    for intent_id, setup_id, status, exchange_id in intents:
-        import hashlib
-        client_id = "smog" + hashlib.sha256(setup_id.encode()).hexdigest()[:28]
-        params = {"instId": "SOL-USDT"}
-        params["orderId" if exchange_id else "clientOrderId"] = exchange_id or client_id
-        try:
-            data = demo_read("order_detail", params).get("data")
-            if not isinstance(data, dict) or not data.get("orderId"):
-                continue
-            state = data.get("state")
-            new_status = "filled" if state == "filled" else (
-                "cancelled" if state in ("canceled", "cancelled") else "submitted"
-            )
-            # One-way reconciliation, no order action.
-            with _connect() as conn:
-                conn.execute("""
-                  UPDATE smog_execution_intents
-                  SET status=%s, exchange_order_id=%s, error_code=NULL,
-                      updated_at=now()
-                  WHERE id=%s AND status IN ('submitted', 'unknown')
-                """, (new_status, str(data["orderId"]), intent_id))
-        except Exception:
-            log.warning("Order detail unavailable for demo intent %s", intent_id)
+    from smog_lifecycle import reconcile_entries, manage_positions
+    reconcile_entries(_connect)
+    manage_positions(_connect)
 
 
 def run_worker():
@@ -183,7 +178,7 @@ def run_worker():
                     while process_one():
                         pass
                     reconcile_orders()
-                    for _ in conn.notifies(timeout=30, stop_after=1):
+                    for _ in conn.notifies(timeout=5, stop_after=1):
                         pass
         except Exception:
             log.exception("Demo worker reconnecting")
