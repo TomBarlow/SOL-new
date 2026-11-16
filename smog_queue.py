@@ -173,6 +173,8 @@ def submit_decision(body: Decision, authorization: str | None = Header(default=N
                 VALUES (%s, %s, 'blocked')
                 ON CONFLICT (setup_id) DO NOTHING
             """, (body.setup_id, Jsonb(body.trade_plan)))
+            from smog_demo_worker import promote_fresh_intent
+            promote_fresh_intent(conn, body.setup_id, body.trade_plan)
     return {"status": "recorded", "execution_allowed": False}
 
 
