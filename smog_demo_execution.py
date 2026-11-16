@@ -149,6 +149,21 @@ def submit_partial_close(setup_id: str, direction: str, size) -> dict:
     })
 
 
+def submit_emergency_close(setup_id: str, direction: str, size) -> dict:
+    """Last-resort demo reduce-only close when exchange protection is absent."""
+    q = _positive(size)
+    if q % _positive(demo_instrument()["lotSize"]):
+        raise ExecutionBlocked("Emergency close violates contract increment")
+    if direction not in ("long", "short"):
+        raise ValueError("Invalid direction")
+    return _signed_post("/api/v1/trade/order", {
+        "instId": "SOL-USDT", "marginMode": "cross", "positionSide": "net",
+        "side": "sell" if direction == "long" else "buy",
+        "orderType": "market", "size": str(q), "reduceOnly": "true",
+        "clientOrderId": client_action_id(setup_id, "emergency_exit"),
+    })
+
+
 def amend_protective_stop(tpsl_id: str, price, request_id: str) -> dict:
     """Modify a verified existing standalone protective stop."""
     stop = _positive(price)
@@ -202,7 +217,7 @@ def check_contract_and_account(proposal: dict, max_notional_usdt: Decimal = Deci
     tick = _positive(instrument["tickSize"])
     lot = _positive(instrument["lotSize"])
     minimum = _positive(instrument["minSize"])
-    if price % tick or stop % tick or size % lot or size < minimum:
+    if price % tick or stop % tick or size % lot or size < max(minimum, 2 * lot):
         raise ExecutionBlocked("Entry, stop or contract quantity violates exchange increments")
     if price * size * _positive(instrument["contractValue"]) > max_notional_usdt:
         raise ExecutionBlocked("Demo notional cap exceeded")
