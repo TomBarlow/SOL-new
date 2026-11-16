@@ -182,11 +182,14 @@ def submit_decision(body: Decision, authorization: str | None = Header(default=N
 def execution_intents(authorization: str | None = Header(default=None)):
     """Read-only operational status; never expose plans or account credentials."""
     _auth(authorization)
+    from smog_demo_worker import enabled
     with _db() as conn:
         rows = conn.execute("""
             SELECT status, count(*) FROM smog_execution_intents GROUP BY status
         """).fetchall()
-    return {"execution_enabled": False, "intents_by_status": dict(rows)}
+    return {"execution_enabled": enabled(),
+            "demo_execution_enabled": enabled(),
+            "intents_by_status": dict(rows)}
 
 
 
@@ -222,6 +225,7 @@ def outcomes(authorization: str | None = Header(default=None)):
 @router.get("/stats")
 def stats(authorization: str | None = Header(default=None)):
     _auth(authorization)
+    from smog_demo_worker import enabled
     with _db() as conn:
         decisions = conn.execute("""
             SELECT decision->>'decision', count(*) FROM smog_tasks
@@ -231,4 +235,6 @@ def stats(authorization: str | None = Header(default=None)):
             SELECT status, count(*) FROM smog_execution_intents GROUP BY 1
         """).fetchall()
     return {"decisions": dict(decisions), "execution": dict(intents),
+            "demo_execution_enabled": enabled(),
             "pnl_available": False}
+
