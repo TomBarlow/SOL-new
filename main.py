@@ -15,6 +15,7 @@ from smog_queue import router as smog_router, init_queue, enqueue_candidate
 from smog_events import router as smog_events_router
 from smog_orchestrator import Event, detect_candidates
 from smog_adx_filter import evaluate_adx
+from smog_fvg_geometry import inspect_fvg
 from smog_blofin_auth import check_demo_auth
 
 logging.basicConfig(level=logging.INFO)
@@ -152,6 +153,7 @@ async def tradingview(request: Request):
                     WHERE bar_time BETWEEN %s AND %s
                     ORDER BY id
                 ''', (bar_time_ms - 30 * 60_000, bar_time_ms + 30 * 60_000)).fetchall()
+            event_times = {row[0]: row[2] for row in rows}
             events = [Event(*row) for row in rows if row[1] in {
                 'og_long', 'og_short', 'internal_bullish_choch',
                 'internal_bearish_choch', 'bullish_fvg_formed',
@@ -159,19 +161,29 @@ async def tradingview(request: Request):
                 'bearish_fvg_mitigated'}]
             for candidate in detect_candidates(events):
                 if candidate.triggered_by_id == inserted[0]:
+                    geometry = inspect_fvg(
+                        event_times[candidate.fvg_id],
+                        candidate.asof_bar_time_ms, candidate.direction
+                    )
                     result = evaluate_adx(candidate.asof_bar_time_ms)
+                    result["fvg_geometry"] = geometry
                     with psycopg.connect(db_url(), connect_timeout=5) as audit_conn:
                         audit_conn.execute("""
                             INSERT INTO smog_adx_audit(candidate_key, candidate, assessment)
                             VALUES (%s, %s, %s)
                             ON CONFLICT (candidate_key) DO NOTHING
                         """, (candidate.key, Jsonb(candidate.to_payload()), Jsonb(result)))
-                    if result["status"] == "PASS":
+                    if (result["status"] == "PASS"
+                            and geometry["status"] == "VERIFIED"
+                            and not geometry["mitigated"]):
                         enriched = candidate.to_payload()
                         enriched["adx_prefilter"] = result
+                        enriched["fvg"] = geometry
                         enqueue_candidate(enriched)
                     else:
-                        log.info("ADX candidate=%s status=%s", candidate.key, result["status"])
+                        log.info("SMOG prefilter candidate=%s adx=%s fvg=%s",
+                                 candidate.key, result["status"],
+                                 geometry["status"] + ("_MITIGATED" if geometry.get("mitigated") else ""))
         except Exception:
             log.exception('SMOG queue processing failed; source alert remains stored')
         log.info('stored id=%s event=%s bar_time=%s', inserted[0], payload.event, bar_time_ms)
