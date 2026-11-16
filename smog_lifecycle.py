@@ -162,13 +162,12 @@ def reconcile_entries(conn_factory):
         intents = conn.execute("""
             SELECT id, setup_id, trade_plan, status, exchange_order_id, created_at
             FROM smog_execution_intents
-            WHERE status IN ('submitted','unknown','cancel_pending')
+            WHERE status IN ('submitted','unknown')
             ORDER BY id LIMIT 50
         """).fetchall()
     for intent_id, setup_id, plan, status, exchange_id, created_at in intents:
         try:
-            client_id = client_action_id(setup_id, "entry")
-            # Existing entry client IDs predate the lifecycle engine.
+            # Opening order IDs are derived from the original setup key.
             import hashlib
             client_id = "smog" + hashlib.sha256(setup_id.encode()).hexdigest()[:28]
             detail = _order_detail(exchange_id, client_id)
@@ -201,7 +200,7 @@ def reconcile_entries(conn_factory):
             pending = state in ("live", "partially_filled", "partially-filled")
             if pending and (expiry or filled > 0):
                 _cancel_pending(conn_factory, intent_id, order_id)
-                new_status = "cancel_pending"
+                new_status = "submitted"
             elif state == "filled" or (state in ("canceled","cancelled") and filled > 0):
                 new_status = "filled"
             elif state in ("canceled", "cancelled", "expired"):
@@ -213,7 +212,7 @@ def reconcile_entries(conn_factory):
                     UPDATE smog_execution_intents
                     SET status=%s, exchange_order_id=%s, error_code=NULL,
                         updated_at=now()
-                    WHERE id=%s AND status IN ('submitted','unknown','cancel_pending')
+                    WHERE id=%s AND status IN ('submitted','unknown')
                 """, (new_status, order_id, intent_id))
         except Exception:
             log.exception("Entry reconciliation failed for intent %s", intent_id)
