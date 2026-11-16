@@ -72,7 +72,24 @@ def startup():
     init_queue()
     # One read-only demo authentication probe at startup. Never log secrets or balances.
     import threading
-    threading.Thread(target=lambda: log.info('blofin_demo_auth=%s', check_demo_auth()), daemon=True).start()
+    def demo_preflight():
+        log.info('blofin_demo_auth=%s', check_demo_auth())
+        from smog_demo_execution import demo_read, demo_instrument
+        for endpoint in ('positions', 'orders', 'fills', 'position_mode', 'margin_mode', 'tpsl'):
+            try:
+                result = demo_read(endpoint, {'instId': 'SOL-USDT'} if endpoint in ('positions', 'orders', 'fills', 'tpsl') else None)
+                data = result.get('data')
+                safe = {'status': 'OK', 'count': len(data)} if isinstance(data, list) else {'status': 'OK', 'mode': data.get('positionMode') or data.get('marginMode'), 'multi_position': data.get('multiPosition')} if isinstance(data, dict) else {'status': 'UNKNOWN'}
+                log.info('blofin_demo_preflight_%s=%s', endpoint, safe)
+            except Exception as exc:
+                log.warning('blofin_demo_preflight_%s=ERROR:%s', endpoint, type(exc).__name__)
+        try:
+            inst = demo_instrument()
+            safe = {k: inst.get(k) for k in ('instId', 'contractValue', 'minSize', 'lotSize', 'tickSize', 'state', 'apiPermission')}
+            log.info('blofin_demo_preflight_instrument=%s', safe)
+        except Exception as exc:
+            log.warning('blofin_demo_preflight_instrument=ERROR:%s', type(exc).__name__)
+    threading.Thread(target=demo_preflight, daemon=True).start()
     with psycopg.connect(db_url(), connect_timeout=5) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS smog_adx_audit (
