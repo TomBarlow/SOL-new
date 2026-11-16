@@ -11,6 +11,8 @@ class DemoExecutionTests(unittest.TestCase):
         long = prepare_limit_order("setup-1", "long", "150", "1", "148")
         self.assertEqual(long["side"], "buy")
         self.assertEqual(long["instId"], "SOL-USDT")
+        self.assertEqual(long["positionSide"], "net")
+        self.assertEqual(long["marginMode"], "cross")
         self.assertEqual(long["slTriggerPrice"], "148")
         self.assertEqual(long["clientOrderId"],
                          prepare_limit_order("setup-1", "long", "150", "1", "148")["clientOrderId"])
