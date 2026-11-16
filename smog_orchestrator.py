@@ -87,11 +87,6 @@ def detect_candidates(events: Iterable[Event], window_ms: int = WINDOW_MS) -> li
             for e in reversed(relevant):
                 if e.event != FVG[direction]:
                     continue
-                # No reliable gap ID in existing mitigation alerts: fail closed.
-                if any(m.event == MITIGATED[direction] and
-                       e.bar_time_ms <= m.bar_time_ms <= current.bar_time_ms
-                       for m in history):
-                    continue
                 ogs = [x for x in relevant if x.event == OG[direction]]
                 chochs = [x for x in relevant if x.event == CHOCH[direction]]
                 if not ogs or not chochs:
