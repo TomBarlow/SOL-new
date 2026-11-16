@@ -76,11 +76,14 @@ def startup():
     def demo_preflight():
         log.info('blofin_demo_auth=%s', check_demo_auth())
         from smog_demo_execution import demo_read, demo_instrument
-        for endpoint in ('positions', 'orders', 'fills', 'position_mode', 'margin_mode', 'tpsl'):
+        for endpoint in ('positions', 'orders', 'fills', 'position_mode', 'margin_mode', 'leverage', 'tpsl'):
             try:
-                result = demo_read(endpoint, {'instId': 'SOL-USDT'} if endpoint in ('positions', 'orders', 'fills', 'tpsl') else None)
+                result = demo_read(endpoint, {'instId': 'SOL-USDT'} if endpoint in ('positions', 'orders', 'fills', 'tpsl') else {'instId': 'SOL-USDT', 'marginMode': 'cross'} if endpoint == 'leverage' else None)
                 data = result.get('data')
-                safe = {'status': 'OK', 'count': len(data)} if isinstance(data, list) else {'status': 'OK', 'mode': data.get('positionMode') or data.get('marginMode'), 'multi_position': data.get('multiPosition')} if isinstance(data, dict) else {'status': 'UNKNOWN'}
+                safe = ({'status': 'OK', 'leverage': data[0].get('leverage'),
+                         'position_side': data[0].get('positionSide')}
+                        if endpoint == 'leverage' and isinstance(data, list) and len(data) == 1
+                        else {'status': 'OK', 'count': len(data)} if isinstance(data, list) else {'status': 'OK', 'mode': data.get('positionMode') or data.get('marginMode'), 'multi_position': data.get('multiPosition')} if isinstance(data, dict) else {'status': 'UNKNOWN'}
                 log.info('blofin_demo_preflight_%s=%s', endpoint, safe)
             except Exception as exc:
                 log.warning('blofin_demo_preflight_%s=ERROR:%s', endpoint, type(exc).__name__)
