@@ -47,11 +47,11 @@ def _positive(value):
 
 
 def prepare_limit_order(setup_id: str, direction: str, price, size, stop,
-                        margin_mode="isolated") -> dict:
+                        margin_mode="cross") -> dict:
     """Build order proposal; no exchange call. Never accept arbitrary symbols."""
     if not setup_id or len(setup_id) > 128:
         raise ValueError("Invalid setup id")
-    if direction not in ("long", "short") or margin_mode != "isolated":
+    if direction not in ("long", "short") or margin_mode != "cross":
         raise ValueError("Unsupported direction/margin mode")
     p, q, sl = _positive(price), _positive(size), _positive(stop)
     if direction == "long" and not sl < p:
@@ -61,7 +61,7 @@ def prepare_limit_order(setup_id: str, direction: str, price, size, stop,
     # Deterministic idempotency identifier, max 32 chars.
     client_id = "smog" + hashlib.sha256(setup_id.encode()).hexdigest()[:28]
     return {"instId": "SOL-USDT", "marginMode": margin_mode,
-            "positionSide": direction, "side": "buy" if direction == "long" else "sell",
+            "positionSide": "net", "side": "buy" if direction == "long" else "sell",
             "orderType": "limit", "price": str(p), "size": str(q),
             "slTriggerPrice": str(sl), "slOrderPrice": "-1",
             "slTriggerPriceType": "last", "clientOrderId": client_id}
@@ -95,6 +95,35 @@ def _signed_post(path: str, body: dict) -> dict:
     return result
 
 
+def check_contract_and_account(proposal: dict, max_notional_usdt: Decimal = Decimal("100")) -> None:
+    """Fail closed on live account mode, open exposure and contract geometry."""
+    mode = demo_read("position_mode").get("data") or {}
+    margin = demo_read("margin_mode").get("data") or {}
+    if mode.get("positionMode") != "net_mode" or margin.get("marginMode") != "cross":
+        raise ExecutionBlocked("Unexpected demo account position or margin mode")
+    if mode.get("multiPosition") not in (False, "false", None):
+        raise ExecutionBlocked("Multi-position mode unsupported")
+    for endpoint in ("positions", "orders", "tpsl"):
+        rows = demo_read(endpoint, {"instId": "SOL-USDT"}).get("data") or []
+        if rows:
+            raise ExecutionBlocked(f"Existing demo {endpoint} require reconciliation")
+    instrument = demo_instrument()
+    if instrument.get("state") != "live" or instrument.get("apiPermission") != "full":
+        raise ExecutionBlocked("Instrument is not available for opening orders")
+    price = _positive(proposal["price"])
+    size = _positive(proposal["size"])
+    stop = _positive(proposal["slTriggerPrice"])
+    tick = _positive(instrument["tickSize"])
+    lot = _positive(instrument["lotSize"])
+    minimum = _positive(instrument["minSize"])
+    if price % tick or stop % tick or size % lot or size < minimum:
+        raise ExecutionBlocked("Entry, stop or contract quantity violates exchange increments")
+    if price * size * _positive(instrument["contractValue"]) > max_notional_usdt:
+        raise ExecutionBlocked("Demo notional cap exceeded")
+    if abs(price - stop) * size * _positive(instrument["contractValue"]) > Decimal("1"):
+        raise ExecutionBlocked("Demo stop-loss risk cap exceeded")
+
+
 def submit_order(proposal: dict) -> dict:
     """Real demo exchange order; intentionally gated off by default."""
     allowed = {"instId", "marginMode", "positionSide", "side", "orderType",
@@ -102,9 +131,9 @@ def submit_order(proposal: dict) -> dict:
                "slTriggerPriceType", "clientOrderId"}
     if set(proposal) != allowed or proposal["instId"] != "SOL-USDT":
         raise ValueError("Unexpected order fields or instrument")
-    if proposal["orderType"] != "limit" or proposal["marginMode"] != "isolated":
+    if proposal["orderType"] != "limit" or proposal["marginMode"] != "cross" or proposal["positionSide"] != "net":
         raise ValueError("Unsupported order mode")
-    direction = proposal["positionSide"]
+    direction = "long" if proposal["side"] == "buy" else "short" if proposal["side"] == "sell" else ""
     expected = prepare_limit_order("validation", direction, proposal["price"],
                                    proposal["size"], proposal["slTriggerPrice"])
     for key in ("side", "slOrderPrice", "slTriggerPriceType"):
@@ -112,6 +141,7 @@ def submit_order(proposal: dict) -> dict:
             raise ValueError("Invalid order parameters")
     if not str(proposal["clientOrderId"]).startswith("smog"):
         raise ValueError("Invalid client order id")
+    check_contract_and_account(proposal)
     return _signed_post("/api/v1/trade/order", proposal)
 
 
