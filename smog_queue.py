@@ -174,3 +174,41 @@ def submit_decision(body: Decision, authorization: str | None = Header(default=N
                 ON CONFLICT (setup_id) DO NOTHING
             """, (body.setup_id, Jsonb(body.trade_plan)))
     return {"status": "recorded", "execution_allowed": False}
+
+
+@router.get("/execution-intents")
+def execution_intents(authorization: str | None = Header(default=None)):
+    """Read-only operational status; never expose plans or account credentials."""
+    _auth(authorization)
+    with _db() as conn:
+        rows = conn.execute("""
+            SELECT status, count(*) FROM smog_execution_intents GROUP BY status
+        """).fetchall()
+    return {"execution_enabled": False, "intents_by_status": dict(rows)}
+
+
+@router.get("/outcomes")
+def outcomes(authorization: str | None = Header(default=None)):
+    """Return known order lifecycle counts; no invented P&L."""
+    _auth(authorization)
+    with _db() as conn:
+        rows = conn.execute("""
+            SELECT status, count(*) FROM smog_execution_intents GROUP BY status
+        """).fetchall()
+    return {"source": "execution_intents", "counts": dict(rows),
+            "pnl_available": False}
+
+
+@router.get("/stats")
+def stats(authorization: str | None = Header(default=None)):
+    _auth(authorization)
+    with _db() as conn:
+        decisions = conn.execute("""
+            SELECT decision->>'decision', count(*) FROM smog_tasks
+            WHERE status='decided' GROUP BY 1
+        """).fetchall()
+        intents = conn.execute("""
+            SELECT status, count(*) FROM smog_execution_intents GROUP BY 1
+        """).fetchall()
+    return {"decisions": dict(decisions), "execution": dict(intents),
+            "pnl_available": False}
