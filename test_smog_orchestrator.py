@@ -19,7 +19,12 @@ class WakeUpTests(unittest.TestCase):
         ])
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].direction, "long")
-        self.assertFalse(result[0].to_payload()["execution_allowed"])
+        payload = result[0].to_payload()
+        self.assertFalse(payload["execution_allowed"])
+        self.assertEqual(payload["signal_bars"], {
+            "og": 0, "internal_choch": 2 * 60_000,
+            "fvg_formed": 3 * 60_000,
+        })
 
     def test_fvg_can_precede_choch(self):
         result = detect_candidates([
@@ -27,6 +32,10 @@ class WakeUpTests(unittest.TestCase):
             e(3, "internal_bullish_choch", 2)
         ])
         self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].to_payload()["signal_bars"], {
+            "og": 60_000, "internal_choch": 2 * 60_000,
+            "fvg_formed": 0,
+        })
 
     def test_mitigation_of_another_gap_does_not_globally_suppress(self):
         self.assertEqual(len(detect_candidates([
@@ -54,3 +63,4 @@ class WakeUpTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
