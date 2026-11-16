@@ -83,12 +83,23 @@ def events(authorization: str | None = Header(default=None),
 def demo_exchange_check(authorization: str | None = Header(default=None)):
     """Authenticated read-only demo reconciliation; returns statuses, never account data."""
     _auth(authorization)
-    from smog_demo_execution import demo_read
+    from smog_demo_execution import demo_read, demo_instrument
     statuses = {}
-    for endpoint in ("positions", "orders", "fills"):
+    for endpoint in ("positions", "orders", "fills", "position_mode", "margin_mode", "tpsl"):
         try:
             payload = demo_read(endpoint, {"instId": "SOL-USDT"})
             statuses[endpoint] = {"status": "OK", "count": len(payload.get("data") or [])}
         except Exception as exc:
             statuses[endpoint] = {"status": "ERROR", "error_type": type(exc).__name__}
+    try:
+        instrument = demo_instrument()
+        statuses["instrument"] = {
+            "status": "OK", "instId": instrument.get("instId"),
+            "contractValue": instrument.get("contractValue"),
+            "minSize": instrument.get("minSize"),
+            "lotSize": instrument.get("lotSize"),
+            "tickSize": instrument.get("tickSize")
+        }
+    except Exception as exc:
+        statuses["instrument"] = {"status": "ERROR", "error_type": type(exc).__name__}
     return {"demo_only": True, "checks": statuses, "orders_enabled": False}
