@@ -64,6 +64,9 @@ def enqueue_candidate(candidate: dict) -> bool:
             VALUES (%s, %s) ON CONFLICT (candidate_key) DO NOTHING
             RETURNING id
         """, (key, Jsonb(candidate))).fetchone()
+        if row is not None:
+            # Transactional notification: delivered only if candidate insert commits.
+            conn.execute("SELECT pg_notify(%s, %s)", ("smog_candidates", str(row[0])))
     return row is not None
 
 
