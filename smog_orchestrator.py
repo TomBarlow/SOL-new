@@ -101,7 +101,7 @@ def detect_candidates(events: Iterable[Event], window_ms: int = WINDOW_MS) -> li
         history.append(current)
         for direction in ("long", "short"):
             relevant = [e for e in history
-                        if 0 <= current.bar_time_ms - e.bar_time_ms <= window_ms]
+                        if abs(current.bar_time_ms - e.bar_time_ms) <= window_ms]
             # Ignore events from future-dated bars, and only consider the
             # current arrival when it completes the three-signal combination.
             for e in reversed(relevant):
@@ -112,6 +112,18 @@ def detect_candidates(events: Iterable[Event], window_ms: int = WINDOW_MS) -> li
                 if not ogs or not chochs:
                     continue
                 og, choch = ogs[-1], chochs[-1]
+                # A displacement FVG is formed on or before its internal CHoCH.
+                # Its TradingView alert may arrive later than that CHoCH alert.
+                if e.bar_time_ms > choch.bar_time_ms:
+                    continue
+                if max(og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms) - min(
+                        og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms) > window_ms:
+                    continue
+                if any(x.event == MITIGATED[direction]
+                       and e.bar_time_ms <= x.bar_time_ms <= max(
+                           og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms)
+                       for x in relevant):
+                    continue
                 if current.id not in (e.id, og.id, choch.id):
                     continue
                 ids = (og.id, choch.id, e.id)
@@ -120,7 +132,7 @@ def detect_candidates(events: Iterable[Event], window_ms: int = WINDOW_MS) -> li
                     continue
                 seen_keys.add(key)
                 candidates.append(Candidate(
-                    key, direction, *ids, current.id, current.bar_time_ms,
+                    key, direction, *ids, current.id, max(og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms),
                     og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms,
                     og.price, choch.price, e.price
                 ))
