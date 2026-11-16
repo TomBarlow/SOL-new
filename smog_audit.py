@@ -131,5 +131,5 @@ def settle_observations(conn_factory):
             UPDATE smog_shadow_outcomes SET audited_at=now()
             WHERE setup_id = ANY(%s) AND audited_at IS NULL
         """, ([row[0] for row in pending],))
-        log.info("Recorded 50-setup audit batch through task %s",
-                 max(row[1] for row in pending))
+        log.info("SMOG_AUDIT_BATCH through=%s metrics=%s",
+                 max(row[1] for row in pending), metrics)
