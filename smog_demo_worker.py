@@ -82,6 +82,20 @@ def process_one():
         """, (intent_id,))
     # The committed 'submitting' marker prevents retry after process crash.
     try:
+        from smog_fvg_geometry import inspect_fvg
+        import time
+        with _connect() as conn:
+            task = conn.execute("""
+                SELECT payload FROM smog_tasks WHERE candidate_key=%s
+            """, (setup_id,)).fetchone()
+        fvg = (task[0] if task else {}).get("fvg") or {}
+        latest_closed_start = ((int(time.time() * 1000) // 60_000) - 1) * 60_000
+        current_fvg = inspect_fvg(fvg.get("formation_bar_ms", 0),
+                                  latest_closed_start, plan["direction"])
+        if (current_fvg.get("status") != "VERIFIED"
+                or current_fvg.get("identity") != fvg.get("identity")
+                or current_fvg.get("mitigated") is not False):
+            raise ExecutionBlocked("FVG mitigated or geometry unavailable at order time")
         proposal = prepare_limit_order(
             setup_id, plan["direction"], plan["entry"],
             plan["size"], plan["stop"]
