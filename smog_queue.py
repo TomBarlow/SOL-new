@@ -189,6 +189,24 @@ def execution_intents(authorization: str | None = Header(default=None)):
     return {"execution_enabled": False, "intents_by_status": dict(rows)}
 
 
+
+@router.get("/positions")
+def positions(authorization: str | None = Header(default=None)):
+    """Authenticated read-only BloFin demo position snapshot."""
+    _auth(authorization)
+    from smog_demo_execution import demo_read
+    try:
+        response = demo_read("positions", {"instId": "SOL-USDT"})
+        rows = response.get("data") or []
+        return {"source": "blofin_demo", "positions": [
+            {k: item.get(k) for k in ("instId", "positionSide", "positions",
+                                      "averagePrice", "markPrice", "upl",
+                                      "marginMode", "leverage", "positionId")}
+            for item in rows
+        ]}
+    except Exception:
+        raise HTTPException(503, "Demo position query unavailable")
+
 @router.get("/outcomes")
 def outcomes(authorization: str | None = Header(default=None)):
     """Return known order lifecycle counts; no invented P&L."""
