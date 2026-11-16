@@ -69,6 +69,11 @@ def _shadow(candidate):
 def settle_observations(conn_factory):
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=SETTLEMENT_MINUTES)
     with conn_factory() as conn:
+        conn.execute("""
+            UPDATE smog_tasks SET status='expired', lease_until=NULL
+            WHERE status IN ('pending','leased')
+              AND created_at < now() - interval '10 minutes'
+        """)
         tasks = conn.execute("""
             SELECT t.id, t.candidate_key, t.payload, t.decision,
                    t.status, i.status, p.closed_at
@@ -126,5 +131,5 @@ def settle_observations(conn_factory):
             UPDATE smog_shadow_outcomes SET audited_at=now()
             WHERE setup_id = ANY(%s) AND audited_at IS NULL
         """, ([row[0] for row in pending],))
-        log.info("Recorded new 50-setup audit batch through task %s",
-                 metrics["actual_closed_trade_count"])
+        log.info("Recorded 50-setup audit batch through task %s",
+                 max(row[1] for row in pending))
