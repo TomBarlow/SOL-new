@@ -77,3 +77,18 @@ def events(authorization: str | None = Header(default=None),
     return StreamingResponse(_stream(last_event_id), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache, no-transform",
                                       "X-Accel-Buffering": "no"})
+
+
+@router.get("/demo-exchange-check")
+def demo_exchange_check(authorization: str | None = Header(default=None)):
+    """Authenticated read-only demo reconciliation; returns statuses, never account data."""
+    _auth(authorization)
+    from smog_demo_execution import demo_read
+    statuses = {}
+    for endpoint in ("positions", "orders", "fills"):
+        try:
+            payload = demo_read(endpoint, {"instId": "SOL-USDT"})
+            statuses[endpoint] = {"status": "OK", "count": len(payload.get("data") or [])}
+        except Exception as exc:
+            statuses[endpoint] = {"status": "ERROR", "error_type": type(exc).__name__}
+    return {"demo_only": True, "checks": statuses, "orders_enabled": False}
