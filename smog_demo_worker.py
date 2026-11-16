@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import psycopg
 from smog_demo_execution import (
-    ExecutionBlocked, prepare_limit_order, submit_order
+    ExecutionBlocked, prepare_limit_order, submit_order, demo_read
 )
 log = logging.getLogger("smog.demo.worker")
 
@@ -110,6 +110,42 @@ def process_one():
     return True
 
 
+def reconcile_orders():
+    """Resolve known demo order states without guessing fills or retrying sends."""
+    if not enabled():
+        return
+    with _connect() as conn:
+        intents = conn.execute("""
+          SELECT id, setup_id, status, exchange_order_id
+          FROM smog_execution_intents
+          WHERE status IN ('submitted', 'unknown')
+          ORDER BY id LIMIT 50
+        """).fetchall()
+    for intent_id, setup_id, status, exchange_id in intents:
+        import hashlib
+        client_id = "smog" + hashlib.sha256(setup_id.encode()).hexdigest()[:28]
+        params = {"instId": "SOL-USDT"}
+        params["orderId" if exchange_id else "clientOrderId"] = exchange_id or client_id
+        try:
+            data = demo_read("order_detail", params).get("data")
+            if not isinstance(data, dict) or not data.get("orderId"):
+                continue
+            state = data.get("state")
+            new_status = "filled" if state == "filled" else (
+                "cancelled" if state in ("canceled", "cancelled") else "submitted"
+            )
+            # One-way reconciliation, no order action.
+            with _connect() as conn:
+                conn.execute("""
+                  UPDATE smog_execution_intents
+                  SET status=%s, exchange_order_id=%s, error_code=NULL,
+                      updated_at=now()
+                  WHERE id=%s AND status IN ('submitted', 'unknown')
+                """, (new_status, str(data["orderId"]), intent_id))
+        except Exception:
+            log.warning("Order detail unavailable for demo intent %s", intent_id)
+
+
 def run_worker():
     """Event-driven wake with periodic recovery for notifications lost on restart."""
     import time
@@ -121,6 +157,7 @@ def run_worker():
                 while True:
                     while process_one():
                         pass
+                    reconcile_orders()
                     for _ in conn.notifies(timeout=30, stop_after=1):
                         pass
         except Exception:
