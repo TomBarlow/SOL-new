@@ -1,8 +1,4 @@
-"""SMOG Hermes task queue: independent, read-only/dry-run integration router.
-
-Mount with app.include_router(router) only after testing. No exchange execution.
-SMOG_API_TOKEN is a separate secret from TradingView WEBHOOK_SECRET.
-"""
+"""Authenticated Hermes decisions, durable demo execution queue, and outcomes."""
 import hashlib
 import hmac
 import os
@@ -65,6 +61,10 @@ def init_queue():
                                   'rejected','cancelled','filled','unknown'))
             )
         """)
+        from smog_lifecycle import init_schema
+        init_schema(conn)
+        from smog_audit import init_audit
+        init_audit(conn)
 
 
 def enqueue_candidate(candidate: dict) -> bool:
@@ -227,14 +227,62 @@ def positions(authorization: str | None = Header(default=None)):
 
 @router.get("/outcomes")
 def outcomes(authorization: str | None = Header(default=None)):
-    """Return known order lifecycle counts; no invented P&L."""
+    """Verified exchange fills and realized net P&L, grouped by trade."""
     _auth(authorization)
     with _db() as conn:
-        rows = conn.execute("""
-            SELECT status, count(*) FROM smog_execution_intents GROUP BY status
+        conn.row_factory = psycopg.rows.dict_row
+        trades = conn.execute("""
+            SELECT p.setup_id, p.direction, p.initial_size, p.open_size,
+                   p.entry_price, p.initial_stop, p.current_stop,
+                   p.opened_at, p.closed_at, p.bos_at,
+                   p.partial_filled, p.be_moved, p.pnl_net,
+                   count(f.trade_id) AS exchange_fills
+            FROM smog_managed_positions p
+            LEFT JOIN smog_trade_fills f ON f.intent_id = p.intent_id
+            GROUP BY p.intent_id
+            ORDER BY p.opened_at DESC LIMIT 100
         """).fetchall()
-    return {"source": "execution_intents", "counts": dict(rows),
-            "pnl_available": False}
+        counts = conn.execute("""
+            SELECT status, count(*) FROM smog_execution_intents
+            GROUP BY status
+        """).fetchall()
+    return {"source": "blofin_demo_exchange_reconciled",
+            "counts": dict((row["status"], row["count"]) for row in counts),
+            "trades": [dict(row) for row in trades],
+            "pnl_available": any(row["pnl_net"] is not None for row in trades)}
+
+
+@router.get("/audits")
+def audits(authorization: str | None = Header(default=None)):
+    """Read-only completed 50-setup audit batches."""
+    _auth(authorization)
+    with _db() as conn:
+        conn.row_factory = psycopg.rows.dict_row
+        batches = conn.execute("""
+            SELECT id, through_task_id, resolved_count, metrics, created_at
+            FROM smog_audit_batches ORDER BY id DESC LIMIT 20
+        """).fetchall()
+    return {"source": "closed_observation_windows", "batches": [dict(row) for row in batches]}
+
+
+@router.get("/learning-data")
+def learning_data(authorization: str | None = Header(default=None)):
+    """Structured, independently identifiable actual and shadow outcomes."""
+    _auth(authorization)
+    with _db() as conn:
+        conn.row_factory = psycopg.rows.dict_row
+        rows = conn.execute("""
+            SELECT t.id, t.candidate_key, t.decision->>'decision' AS decision,
+                   t.created_at, t.decided_at, i.status AS execution_status,
+                   p.pnl_net, s.outcome AS shadow_outcome
+            FROM smog_tasks t
+            LEFT JOIN smog_execution_intents i ON i.setup_id=t.candidate_key
+            LEFT JOIN smog_managed_positions p ON p.setup_id=t.candidate_key
+            LEFT JOIN smog_shadow_outcomes s ON s.setup_id=t.candidate_key
+            WHERE t.status IN ('decided','expired')
+            ORDER BY t.id DESC LIMIT 250
+        """).fetchall()
+    return {"observations": [dict(row) for row in rows]}
 
 
 @router.get("/stats")
@@ -249,7 +297,22 @@ def stats(authorization: str | None = Header(default=None)):
         intents = conn.execute("""
             SELECT status, count(*) FROM smog_execution_intents GROUP BY 1
         """).fetchall()
+        realized = conn.execute("""
+            SELECT count(*), COALESCE(sum(pnl_net),0)
+            FROM smog_managed_positions
+            WHERE closed_at IS NOT NULL AND pnl_net IS NOT NULL
+        """).fetchone()
+        open_positions = conn.execute("""
+            SELECT count(*) FROM smog_managed_positions
+            WHERE closed_at IS NULL
+        """).fetchone()[0]
+        audits = conn.execute("""
+            SELECT count(*) FROM smog_audit_batches
+        """).fetchone()[0]
     return {"decisions": dict(decisions), "execution": dict(intents),
+            "managed_open_positions": open_positions,
+            "closed_positions_with_realized_pnl": realized[0],
+            "realized_pnl_usdt_ex_funding": str(realized[1]),
+            "completed_50_setup_audits": audits,
             "demo_execution_enabled": enabled(),
-            "pnl_available": False}
-
+            "pnl_available": realized[0] > 0}
