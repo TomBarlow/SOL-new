@@ -55,6 +55,25 @@ class FvgIdentityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             reconstruct(candles, 2 * 60_000, 3 * 60_000, "short")
 
+    def test_november_16_bearish_alert_has_correct_upper_lower(self):
+        # TradingView's BLOFIN:SOLUSDT.P 17:29–17:32 UTC closed bars.
+        # This FVG was classified UNVERIFIED moments after the 17:31 bar
+        # closed, despite valid geometry once the data became available.
+        candles = [
+            c(29, 71.71, 71.71, 71.43, 71.43),
+            c(30, 71.43, 71.43, 71.26, 71.27),
+            c(31, 71.28, 71.32, 71.23, 71.23),
+            c(32, 71.20, 71.35, 71.20, 71.35),
+        ]
+        original = reconstruct(candles, 31 * 60_000, 31 * 60_000, "short")
+        later = reconstruct(candles, 31 * 60_000, 32 * 60_000, "short")
+        self.assertEqual((original["upper"], original["lower"]), (71.43, 71.32))
+        self.assertEqual(original["midpoint"], 71.375)
+        self.assertFalse(original["mitigated"])
+        self.assertTrue(later["touched"])
+        self.assertFalse(later["mitigated"])
+
 
 if __name__ == "__main__":
     unittest.main()
+
