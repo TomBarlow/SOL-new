@@ -71,6 +71,7 @@ class Candidate:
                 "The three alerts appearing within 30 minutes is only a wake-up condition, not proof of structural association",
                 "Verify FVG boundaries and mitigation state, and wait for a pullback into this exact gap before entry",
                 "If same-displacement membership or the internal break cannot be substantiated from closed candles, return WAIT or SKIP, never TAKE",
+                "For TAKE include rule_eval.fvg_choch_displacement with status PASS, choch_bar_ms and fvg_bar_ms equal to signal_bars, and a concrete candle-based evidence explanation",
                 "Check 50% retracement, entry, stop and risk rules",
                 "Return TAKE, WAIT or SKIP with reasons and supporting evidence"
             ],
