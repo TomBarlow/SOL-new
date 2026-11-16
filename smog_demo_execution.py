@@ -21,6 +21,7 @@ READ_PATHS = {
     "fills": "/api/v1/trade/fills-history",
     "position_mode": "/api/v1/account/position-mode",
     "margin_mode": "/api/v1/account/margin-mode",
+    "leverage": "/api/v1/account/batch-leverage-info",
     "tpsl": "/api/v1/trade/orders-tpsl-pending",
     "order_history": "/api/v1/trade/orders-history",
     "order_detail": "/api/v1/trade/order-detail",
@@ -202,6 +203,14 @@ def check_contract_and_account(proposal: dict, max_notional_usdt: Decimal = Deci
     margin = demo_read("margin_mode").get("data") or {}
     if mode.get("positionMode") != "net_mode" or margin.get("marginMode") != "cross":
         raise ExecutionBlocked("Unexpected demo account position or margin mode")
+    leverage = demo_read("leverage", {
+        "instId": "SOL-USDT", "marginMode": "cross"
+    }).get("data") or []
+    if (len(leverage) != 1
+            or leverage[0].get("instId") != "SOL-USDT"
+            or leverage[0].get("positionSide") != "net"
+            or _positive(leverage[0].get("leverage")) > Decimal("3")):
+        raise ExecutionBlocked("Demo leverage must be verified at no more than 3x")
     if mode.get("multiPosition") not in (False, "false", None):
         raise ExecutionBlocked("Multi-position mode unsupported")
     for endpoint in ("positions", "orders", "tpsl"):
