@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from smog_queue import _auth, Decision, enqueue_candidate, monitor
+from smog_queue import _auth, Decision, enqueue_candidate, monitor, consumer_health
 
 
 class QueueContractTests(unittest.TestCase):
@@ -48,6 +48,27 @@ class QueueContractTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             Decision(**(base | {"decision": "BUY"}))
 
+    def test_consumer_health_exposes_unclaimed_and_expired_queue_work(self):
+        conn = MagicMock()
+        cm = MagicMock()
+        cm.__enter__.return_value = conn
+        conn.execute.return_value.fetchone.return_value = (4, 1, 3, 5, 1, 0)
+        with (patch.dict(os.environ, {"SMOG_API_TOKEN": "test-secret"}),
+              patch("smog_queue._db", return_value=cm)):
+            result = consumer_health(authorization="Bearer test-secret")
+        self.assertEqual(result["unclaimed_over_2m"], 3)
+        self.assertEqual(result["expired_unclaimed_1h"], 5)
+        self.assertEqual(result["expired_claimed_without_decision_1h"], 1)
+        self.assertTrue(result["needs_attention"])
+        self.assertTrue(result["requires_external_hermes_consumer"])
+
+    def test_consumer_health_requires_authentication(self):
+        with patch.dict(os.environ, {"SMOG_API_TOKEN": "test-secret"}):
+            with self.assertRaises(HTTPException) as raised:
+                consumer_health(authorization="Bearer invalid")
+        self.assertEqual(raised.exception.status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()
+

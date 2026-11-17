@@ -1,8 +1,8 @@
 """Research-only FVG/Fibonacci geometry and shadow touch regression tests."""
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
-from smog_audit import _fib_midpoint_context, _shadow
+from smog_audit import _fib_midpoint_context, _shadow, settle_observations
 from smog_market_data import Candle
 
 
@@ -63,6 +63,30 @@ class AuditGeometryTests(unittest.TestCase):
         self.assertEqual(result["quality"], "OBSERVED")
         self.assertFalse(result["fvg_touched"])
 
+    def test_expiration_logs_missing_hermes_claims_once(self):
+        conn = MagicMock()
+        cm = MagicMock()
+        cm.__enter__.return_value = conn
+        conn.execute.return_value.fetchall.side_effect = [
+            [(123, 0), (124, 1)], [], [],
+        ]
+        with patch("smog_audit.log") as logger:
+            settle_observations(lambda: cm)
+        logger.warning.assert_called_once()
+        arguments = logger.warning.call_args.args
+        self.assertIn("SMOG_HERMES_QUEUE_STALL", arguments[0])
+        self.assertEqual(arguments[1:], (2, 1, 1, 124))
+
+    def test_no_expiration_produces_no_consumer_warning(self):
+        conn = MagicMock()
+        cm = MagicMock()
+        cm.__enter__.return_value = conn
+        conn.execute.return_value.fetchall.side_effect = [[], [], []]
+        with patch("smog_audit.log") as logger:
+            settle_observations(lambda: cm)
+        logger.warning.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
+

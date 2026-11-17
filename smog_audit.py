@@ -125,11 +125,20 @@ def _shadow(candidate):
 def settle_observations(conn_factory):
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=SETTLEMENT_MINUTES)
     with conn_factory() as conn:
-        conn.execute("""
+        expired = conn.execute("""
             UPDATE smog_tasks SET status='expired', lease_until=NULL
             WHERE status IN ('pending','leased')
               AND created_at < now() - interval '10 minutes'
-        """)
+            RETURNING id, attempts
+        """).fetchall()
+        if expired:
+            unclaimed = sum(attempts == 0 for _, attempts in expired)
+            log.warning(
+                "SMOG_HERMES_QUEUE_STALL expired=%s never_claimed=%s "
+                "claimed_without_decision=%s latest_task_id=%s",
+                len(expired), unclaimed, len(expired) - unclaimed,
+                max(task_id for task_id, _ in expired),
+            )
         tasks = conn.execute("""
             SELECT t.id, t.candidate_key, t.payload, t.decision,
                    t.status, i.status, p.closed_at
@@ -194,3 +203,4 @@ def settle_observations(conn_factory):
         """, ([row[0] for row in pending],))
         log.info("SMOG_AUDIT_BATCH through=%s metrics=%s",
                  max(row[1] for row in pending), metrics)
+

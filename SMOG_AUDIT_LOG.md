@@ -65,3 +65,13 @@
 - The change was explicitly requested as demo management policy. The two external community trade illustrations remain hypotheses about premature breakeven stops, not validated optimisation evidence. A breakeven trigger price is gross of execution costs.
 - Tested locally with 55 isolated unit tests, including BOS-only, 4R-only, simultaneous triggers, both directions, wrong-side-of-market protection and pre-existing partial exits. No synthetic orders or real exchange writes were used in the tests.
 - The one SOL-USDT net cross position, 3x maximum leverage, $100 maximum notional, $1 maximum initial stop risk, demo host and deterministic exchange idempotency are preserved.
+
+## 2026-11-17 17:25 UTC — Hermes consumer disconnect investigation
+
+- From 12:00–17:20 UTC, the active Railway receiver logged 211 successful TradingView webhook deliveries and seven authenticated `/smog/events` SSE connections. HTTP telemetry showed zero `GET /smog/next` task claims and zero `POST /smog/decisions` submissions. Webhook ingestion and FVG recovery were active.
+- At 16:50 UTC the next `SMOG_AUDIT_BATCH` (through task ID 100) reported 50 UNDECIDED out of 50 resolved observations, with zero exchange-verified closed trades or realised P&L. These are operational missed decisions, not trading losses.
+- The accessible Railway project contains the SMOG receiver, CI, Postgres and a separate SOL service. No Hermes consumer service or Hermes credentials are present on the SMOG receiver. Restoring the external Hermes gateway/bridge remains necessary before discretionary TAKE/WAIT/SKIP decisions can resume. Do not fabricate decisions for expired candidates.
+- Added authenticated read-only `/smog/consumer-health` reporting pending/leased, unclaimed older than two minutes, recent expiries without a claim, expired claims without decision, and recent decisions. Existing exchange endpoints and strategy gates remain unchanged.
+- Every expiry batch now emits one `SMOG_HERMES_QUEUE_STALL` warning with a breakdown of unclaimed and leased-but-unanswered tasks. This makes missing decisions visible promptly in Railway logs, ahead of the 50-settlement audit.
+- Passed 59 isolated tests, including four new consumer-health and expiry-warning checks. No demo or live orders were submitted for testing.
+

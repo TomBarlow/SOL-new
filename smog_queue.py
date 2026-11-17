@@ -316,3 +316,38 @@ def stats(authorization: str | None = Header(default=None)):
             "completed_50_setup_audits": audits,
             "demo_execution_enabled": enabled(),
             "pnl_available": realized[0] > 0}
+
+
+@router.get("/consumer-health")
+def consumer_health(authorization: str | None = Header(default=None)):
+    """Authenticated read-only evidence of missed Hermes claims and decisions."""
+    _auth(authorization)
+    with _db() as conn:
+        row = conn.execute("""
+            SELECT
+                count(*) FILTER (WHERE status = 'pending'),
+                count(*) FILTER (WHERE status = 'leased'),
+                count(*) FILTER (WHERE status IN ('pending', 'leased')
+                    AND attempts = 0
+                    AND created_at < now() - interval '2 minutes'),
+                count(*) FILTER (WHERE status = 'expired' AND attempts = 0
+                    AND created_at >= now() - interval '1 hour'),
+                count(*) FILTER (WHERE status = 'expired' AND attempts > 0
+                    AND created_at >= now() - interval '1 hour'),
+                count(*) FILTER (WHERE status = 'decided'
+                    AND decided_at >= now() - interval '1 hour')
+            FROM smog_tasks
+        """).fetchone()
+    pending, leased, unclaimed_over_2m, expired_unclaimed_1h, expired_claimed_1h, decisions_1h = row
+    return {
+        "pending": pending,
+        "leased": leased,
+        "unclaimed_over_2m": unclaimed_over_2m,
+        "expired_unclaimed_1h": expired_unclaimed_1h,
+        "expired_claimed_without_decision_1h": expired_claimed_1h,
+        "recorded_decisions_1h": decisions_1h,
+        "needs_attention": unclaimed_over_2m > 0 or expired_unclaimed_1h > 0
+            or expired_claimed_1h > 0,
+        "requires_external_hermes_consumer": True,
+    }
+
