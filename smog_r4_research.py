@@ -155,7 +155,29 @@ def backfill_once(conn_factory, limit=12):
                 ON CONFLICT (setup_id) DO NOTHING
             """, (key, Jsonb(evidence)))
         completed += 1
-    log.info("SMOG_R4_BACKFILL processed=%s inference_tokens=0", completed)
+    # Operational evidence is aggregate only, with no setup IDs or API secrets.
+    # Counts intentionally distinguish observed false from unverifiable.
+    with conn_factory() as conn:
+        totals = conn.execute("""
+            SELECT COUNT(*),
+                   COUNT(*) FILTER (WHERE evidence->>'status'='PROXY_OBSERVED'),
+                   COUNT(*) FILTER (WHERE
+                     evidence#>>'{proxy_results,og_to_choch,thresholds,50}' = 'true'),
+                   COUNT(*) FILTER (WHERE
+                     evidence#>>'{proxy_results,og_to_choch,thresholds,50}' = 'false'),
+                   COUNT(*) FILTER (WHERE
+                     evidence#>>'{proxy_results,confirmed_pivot,thresholds,50}' = 'true'),
+                   COUNT(*) FILTER (WHERE
+                     evidence#>>'{proxy_results,confirmed_pivot,thresholds,50}' = 'false'),
+                   COUNT(*) FILTER (WHERE
+                     evidence#>>'{sensitivity,50,disagreement}' = 'true')
+            FROM smog_r4_replays
+        """).fetchone()
+    log.info("SMOG_R4_BACKFILL processed=%s total=%s observed=%s "
+             "og_proxy_50_pass=%s og_proxy_50_fail=%s "
+             "pivot_proxy_50_pass=%s pivot_proxy_50_fail=%s "
+             "anchor_disagreement_50=%s inference_tokens=0",
+             completed, *totals)
     return completed
 
 
