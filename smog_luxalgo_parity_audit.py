@@ -13,6 +13,8 @@ log = logging.getLogger("smog.luxalgo.parity")
 def evaluate_choch_rows(rows, fetcher=fetch_closed, delay_seconds=0.15):
     """Assess recorded alerts using candles closed at each actual signal bar."""
     results = Counter()
+    baseline = Counter()
+    longer_history_changed = Counter()
     reasons = Counter()
     mismatches = Counter()
     mismatch_examples = []
@@ -21,8 +23,15 @@ def evaluate_choch_rows(rows, fetcher=fetch_closed, delay_seconds=0.15):
         candidate = {"direction": direction,
                      "signal_bars": {"internal_choch": int(bar_ms)}}
         try:
-            candles = fetcher("1m", int(bar_ms) + MINUTE_MS)
+            # BloFin permits up to 1440 candles/request. Replay 12h to
+            # determine whether the old 200-bar chart warm-up was losing the
+            # indicator's earlier pivot state, with one historical read.
+            candles = fetcher("1m", int(bar_ms) + MINUTE_MS, limit=720)
             outcome = compare_choch(candidate, candles)
+            short = compare_choch(candidate, candles[-200:])
+            baseline[short["status"]] += 1
+            if outcome["status"] != short["status"]:
+                longer_history_changed[(short["status"], outcome["status"])] += 1
             results[outcome["status"]] += 1
             if outcome["status"] == "UNVERIFIABLE":
                 reasons[outcome.get("reason", "UNKNOWN")] += 1
@@ -45,6 +54,9 @@ def evaluate_choch_rows(rows, fetcher=fetch_closed, delay_seconds=0.15):
         if delay_seconds:
             time.sleep(delay_seconds)
     return {"reviewed": len(rows), "outcomes": dict(results),
+            "baseline_200": dict(baseline),
+            "history_impact": {f"{old}_TO_{new}": count
+                               for (old, new), count in longer_history_changed.items()},
             "mismatch_reasons": dict(mismatches),
             "mismatch_examples": mismatch_examples,
             "unverifiable_reasons": dict(reasons)}
@@ -62,10 +74,12 @@ def audit_luxalgo_parity(conn_factory):
         """).fetchall()
     report = evaluate_choch_rows(rows)
     log.info("SMOG_LUXALGO_PARITY window_hours=48 sample_limit=100 "
-             "tv_choch=%s results=%s reasons=%s mismatch_types=%s "
+             "tv_choch=%s results=%s baseline_200=%s history_impact=%s "
+             "reasons=%s mismatch_types=%s "
              "mismatch_examples=%s "
              "model_tokens=0 orders_sent=0",
              report["reviewed"], report["outcomes"],
+             report["baseline_200"], report["history_impact"],
              report["unverifiable_reasons"], report["mismatch_reasons"],
              report["mismatch_examples"])
     return report
