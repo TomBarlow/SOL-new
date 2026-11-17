@@ -123,38 +123,7 @@ def assess_r4(candidate: dict, candles: list) -> dict:
     }
 
 
-def backfill_once(conn_factory, limit=12):
-    """At most limit previously unprocessed observations; read-only market data."""
-    with conn_factory() as conn:
-        tasks = conn.execute("""
-            SELECT t.candidate_key, t.payload
-            FROM smog_tasks AS t
-            LEFT JOIN smog_r4_replays AS r ON r.setup_id=t.candidate_key
-            WHERE r.setup_id IS NULL
-              AND t.created_at < now() - interval '2 minutes'
-              AND t.status IN ('decided','expired')
-            ORDER BY t.id DESC LIMIT %s
-        """, (limit,)).fetchall()
-    if not tasks:
-        return 0
-    completed = 0
-    for key, payload in tasks:
-        try:
-            choch_ms = int((payload.get("signal_bars") or {})["internal_choch"])
-            # The CHoCH bar is known only once its minute has closed.
-            candles = fetch_closed("1m", choch_ms + ONE_MINUTE_MS, limit=200)
-            evidence = assess_r4(payload, candles)
-        except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
-            evidence = {"status": "UNVERIFIABLE", "research_only": True,
-                        "execution_allowed": False, "anchor_authoritative": False,
-                        "reason": type(exc).__name__, "retry_needed": True}
-        with conn_factory() as conn:
-            conn.execute("""
-                INSERT INTO smog_r4_replays(setup_id, evidence)
-                VALUES (%s,%s)
-                ON CONFLICT (setup_id) DO NOTHING
-            """, (key, Jsonb(evidence)))
-        completed += 1
+def _log_research_counts(conn_factory, completed):
     # Operational evidence is aggregate only, with no setup IDs or API secrets.
     # Counts intentionally distinguish observed false from unverifiable.
     with conn_factory() as conn:
@@ -178,6 +147,42 @@ def backfill_once(conn_factory, limit=12):
              "pivot_proxy_50_pass=%s pivot_proxy_50_fail=%s "
              "anchor_disagreement_50=%s inference_tokens=0",
              completed, *totals)
+
+
+def backfill_once(conn_factory, limit=12):
+    """At most limit previously unprocessed observations; read-only market data."""
+    with conn_factory() as conn:
+        tasks = conn.execute("""
+            SELECT t.candidate_key, t.payload
+            FROM smog_tasks AS t
+            LEFT JOIN smog_r4_replays AS r ON r.setup_id=t.candidate_key
+            WHERE r.setup_id IS NULL
+              AND t.created_at < now() - interval '2 minutes'
+              AND t.status IN ('decided','expired')
+            ORDER BY t.id DESC LIMIT %s
+        """, (limit,)).fetchall()
+    if not tasks:
+        _log_research_counts(conn_factory, 0)
+        return 0
+    completed = 0
+    for key, payload in tasks:
+        try:
+            choch_ms = int((payload.get("signal_bars") or {})["internal_choch"])
+            # The CHoCH bar is known only once its minute has closed.
+            candles = fetch_closed("1m", choch_ms + ONE_MINUTE_MS, limit=200)
+            evidence = assess_r4(payload, candles)
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+            evidence = {"status": "UNVERIFIABLE", "research_only": True,
+                        "execution_allowed": False, "anchor_authoritative": False,
+                        "reason": type(exc).__name__, "retry_needed": True}
+        with conn_factory() as conn:
+            conn.execute("""
+                INSERT INTO smog_r4_replays(setup_id, evidence)
+                VALUES (%s,%s)
+                ON CONFLICT (setup_id) DO NOTHING
+            """, (key, Jsonb(evidence)))
+        completed += 1
+    _log_research_counts(conn_factory, completed)
     return completed
 
 
