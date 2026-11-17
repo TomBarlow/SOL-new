@@ -65,6 +65,8 @@ def init_queue():
         init_schema(conn)
         from smog_audit import init_audit
         init_audit(conn)
+        from smog_r4_research import init_r4_schema
+        init_r4_schema(conn)
 
 
 def enqueue_candidate(candidate: dict) -> bool:
@@ -283,6 +285,63 @@ def learning_data(authorization: str | None = Header(default=None)):
             ORDER BY t.id DESC LIMIT 250
         """).fetchall()
     return {"observations": [dict(row) for row in rows]}
+
+
+
+@router.get("/r4-research")
+def r4_research(authorization: str | None = Header(default=None)):
+    """No-inference research dashboard. Proxies are NEVER verified trading gates."""
+    _auth(authorization)
+    from collections import Counter
+    from smog_r4_research import METHODS, THRESHOLDS
+    with _db() as conn:
+        rows = conn.execute("""
+            SELECT r.setup_id, r.evidence, t.decision->>'decision'
+            FROM smog_r4_replays AS r
+            JOIN smog_tasks AS t ON t.candidate_key=r.setup_id
+            ORDER BY t.id DESC LIMIT 300
+        """).fetchall()
+        awaiting = conn.execute("""
+            SELECT COUNT(*) FROM smog_tasks AS t
+            LEFT JOIN smog_r4_replays AS r ON r.setup_id=t.candidate_key
+            WHERE t.status IN ('decided','expired') AND r.setup_id IS NULL
+        """).fetchone()[0]
+    counts = {method: {threshold: {"pass": 0, "fail": 0, "unverifiable": 0}
+                        for threshold in THRESHOLDS} for method in METHODS}
+    reasons = Counter()
+    disagreements = Counter()
+    for _, evidence, _ in rows:
+        if evidence.get("status") != "PROXY_OBSERVED":
+            reasons[evidence.get("reason") or "UNKNOWN"] += 1
+        for method in METHODS:
+            result = (evidence.get("proxy_results") or {}).get(method) or {}
+            for threshold in THRESHOLDS:
+                outcome = ("pass" if result.get("thresholds", {}).get(threshold)
+                           else "fail" if threshold in result.get("thresholds", {})
+                           else "unverifiable")
+                counts[method][threshold][outcome] += 1
+        for threshold, scenario in (evidence.get("sensitivity") or {}).items():
+            if scenario.get("disagreement"):
+                disagreements[threshold] += 1
+    return {
+        "source": "blofin_closed_1m_research_backfill",
+        "research_only": True,
+        "not_authoritative_swing": True,
+        "execution_rules_changed": False,
+        "analysis_scope": "latest_300_completed_r4_replays",
+        "analysed": len(rows),
+        "still_awaiting_replay": awaiting,
+        "unverifiable_reasons": dict(reasons),
+        "anchor_threshold_counts": counts,
+        "cross_anchor_disagreements": dict(disagreements),
+        "latest": [{"setup_key_prefix": key[:12], "original_decision": decision,
+                    "status": evidence.get("status"), "reason": evidence.get("reason"),
+                    "og_proxy_depth": ((evidence.get("proxy_results") or {})
+                                      .get("og_to_choch") or {}).get("retracement"),
+                    "pivot_proxy_depth": ((evidence.get("proxy_results") or {})
+                                         .get("confirmed_pivot") or {}).get("retracement")}
+                   for key, evidence, decision in rows[:30]],
+    }
 
 
 @router.get("/stats")

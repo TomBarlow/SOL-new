@@ -112,6 +112,12 @@ def startup():
                 assessed_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
         """)
+    # Historical R4 sensitivity uses only public closed candles and Postgres.
+    # It runs independently so research can never delay orders or webhooks.
+    from smog_r4_research import run_r4_backfill
+    threading.Thread(target=run_r4_backfill,
+                     args=(lambda: psycopg.connect(db_url(), connect_timeout=5),),
+                     name="smog-r4-research", daemon=True).start()
     # A closed TradingView bar can precede BloFin's confirmed OHLC response.
     # Recover recently unverified candidates without blocking webhook replies.
     from smog_prefilter_retry import run_prefilter_retries

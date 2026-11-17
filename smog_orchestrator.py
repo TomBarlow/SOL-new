@@ -72,6 +72,8 @@ class Candidate:
                 "Verify FVG boundaries and mitigation state, and wait for a pullback into this exact gap before entry",
                 "If same-displacement membership or the internal break cannot be substantiated from closed candles, return WAIT or SKIP, never TAKE",
                 "For TAKE include rule_eval.fvg_choch_displacement with status PASS, choch_bar_ms and fvg_bar_ms equal to signal_bars, and a concrete candle-based evidence explanation",
+                "Check the canonical R4 50% depth against the actual CHoCH displacement swing anchors, not the OG-to-CHoCH range proxy",
+                "Research R4 proxy sensitivity is never categorical PASS/FAIL evidence for execution",
                 "Check 50% retracement, entry, stop and risk rules",
                 "Return TAKE, WAIT or SKIP with reasons and supporting evidence"
             ],
