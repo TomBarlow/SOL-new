@@ -4,7 +4,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from smog_demo_execution import accepted_id, client_action_id, ExecutionBlocked
-from smog_lifecycle import _price_at_four_r, _safe_tpsl
+from smog_lifecycle import _fill_satisfies_target, _price_at_four_r, _safe_tpsl
 
 
 class DemoLifecycleTests(unittest.TestCase):
@@ -41,6 +41,17 @@ class DemoLifecycleTests(unittest.TestCase):
             self.assertIsNone(_safe_tpsl("short", Decimal("1"), Decimal("101")))
             self.assertIsNone(_safe_tpsl("long", Decimal("3"), Decimal("99")))
             self.assertIsNone(_safe_tpsl("long", Decimal("1"), Decimal("100")))
+
+    def test_partial_exchange_fill_does_not_confirm_full_exit(self):
+        detail = {"state": "partially_filled", "filledSize": "0.40"}
+        self.assertFalse(_fill_satisfies_target(detail, Decimal("1.00")))
+        detail["filledSize"] = "1.00"
+        self.assertTrue(_fill_satisfies_target(detail, Decimal("1.00")))
+
+    def test_missing_or_zero_fill_never_confirms_action(self):
+        self.assertFalse(_fill_satisfies_target(None, Decimal("1")))
+        self.assertFalse(_fill_satisfies_target({"state": "filled"}, Decimal("1")))
+        self.assertFalse(_fill_satisfies_target({"filledSize": "1"}, Decimal("0")))
 
 
 if __name__ == "__main__":

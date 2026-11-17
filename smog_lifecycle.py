@@ -79,6 +79,14 @@ def _decimal(value):
     return result
 
 
+def _fill_satisfies_target(detail, target):
+    """Confirm an exchange action only after its full requested size has filled."""
+    if not isinstance(detail, dict):
+        return False
+    requested = _decimal(target)
+    return requested > 0 and _decimal(detail.get("filledSize") or "0") >= requested
+
+
 def _rows(endpoint, params=None):
     response = demo_read(endpoint, params or {"instId": INSTRUMENT})
     data = response.get("data")
@@ -197,6 +205,8 @@ def reconcile_entries(conn_factory):
                         ON CONFLICT (intent_id) DO UPDATE
                         SET initial_size = GREATEST(
                             smog_managed_positions.initial_size, EXCLUDED.initial_size),
+                            open_size = GREATEST(
+                            smog_managed_positions.open_size, EXCLUDED.open_size),
                             entry_price = CASE
                               WHEN smog_managed_positions.partial_filled = false
                               THEN EXCLUDED.entry_price
@@ -239,7 +249,7 @@ def _reconcile_actions(conn_factory, pos):
         try:
             if key == "partial_close":
                 detail = _order_detail(order_id, client_action_id(setup_id, key))
-                if detail and _decimal(detail.get("filledSize") or "0") >= _decimal(target):
+                if _fill_satisfies_target(detail, target):
                     with conn_factory() as conn:
                         _finish_action(conn, action_id, "confirmed", str(detail["orderId"]))
                         conn.execute("""
@@ -272,7 +282,7 @@ def _reconcile_actions(conn_factory, pos):
                             """, (target, key, key, key, intent_id))
             elif key == "emergency_exit":
                 detail = _order_detail(order_id, client_action_id(setup_id, key))
-                if detail and detail.get("state") in ("filled", "partially_filled"):
+                if _fill_satisfies_target(detail, target):
                     with conn_factory() as conn:
                         _finish_action(conn, action_id, "confirmed", str(detail["orderId"]))
             elif key == "entry_cancel":
