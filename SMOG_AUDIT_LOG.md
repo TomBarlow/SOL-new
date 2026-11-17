@@ -40,3 +40,19 @@
 
 - Three user-supplied annotated SOL examples were examined on 17 November. The first showed a bullish CHoCH/BOS continuation and the third a bearish breakdown/retest. The second showed a 1-minute bullish reversal against bearish higher-timeframe SOL and weak BTC context, with an apparent entry beyond the displayed 0.5 retracement.
 - Test hypotheses are FVG-midpoint versus displacement halfway retracement, trend alignment, and whether the existing partial-close/breakeven/FVG-trailing rules retain favourable movement. The screenshots contain selected retrospective price paths, so they provide neither verified exchange fills nor a representative outcome sample.
+
+## 2026-11-17 community examples, later intake
+
+### OG-to-CHoCH timing example (user screenshot IMG_1022)
+
+- User identified an approximately 40-minute interval between OG alerts and a potentially earlier reversal entry while 5-minute ADX was declining.
+- Railway signals for the pictured sequence recorded `og_long` around 13:55 UTC, bullish FVG formation around 13:56–13:58, and `internal_bullish_choch` at approximately 14:12. The 17-minute lag is observable. At 14:12 the ADX prefilter passed and FVG geometry was recovered, but no downstream Hermes task claim or trade was verified in the inspected 13:25–14:25 HTTP logs.
+- Research hypothesis: compare an OG-led, pre-CHoCH early-reversal observation with the existing confirmed CHoCH/FVG sequence, using only closed data available at each proposed decision time. Keep early signals in shadow research until independently tested. Falling ADX alone does not establish a reversal or justify demo execution.
+
+### Two stopped-out trades (user screenshot IMG_1023)
+
+- User reports the external trader was stopped out on both annotated trades. Classify as **two user-reported external losses**. Entry fills, stop prices, stop revisions, exchange exits and realised R-multiples cannot be independently verified from the screenshot.
+- The image contains two long-position drawings, nearby FVG/demand regions, a rising diagonal support line and later upward price movement. The risk/reward drawings and later price path do not establish whether the trader was stopped at the initial stop, by a tightened stop, or at another time.
+- Audit hypotheses: whether initial stops were outside the structural swing and normal adverse excursion, whether early break-even/trailing stop changes caused exit before continuation, the relationship between FVG midpoint and external 0.5 retracement, and whether repeated entries in one swing create correlated losses.
+- Investigate each hypothesis with timestamped pre-entry candles, actual fill/stop amendments and MAE/MFE wherever available. These two reported losses are **excluded** from SMOG demo realised P&L, trade counts and win-rate calculations.
+- No entry or risk rule was changed from these screenshots.
