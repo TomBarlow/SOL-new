@@ -10,6 +10,10 @@ from smog_fvg_geometry import reconstruct
 from smog_luxalgo_structure import compare_choch
 
 MINUTE = 60_000
+# 200 candles lost SMC trend context for 20/85 genuine CHoCH alerts.
+# A 720-candle lookback recovered 82/85 timestamp/tag matches (2026-11-17).
+# BloFin permits up to 1440 candles in a single public candle request.
+SMC_WARMUP_CANDLES = 720
 
 
 def _unverified(reason, **details):
@@ -125,7 +129,7 @@ def inspect_candidate(candidate: dict, asof_bar_ms: int | None = None):
                    candidate["asof_bar_time_ms"])
         if direction not in ("long", "short"):
             raise ValueError("Invalid FVG direction")
-        candles = fetch_closed("1m", asof + MINUTE)
+        candles = fetch_closed("1m", asof + MINUTE, limit=SMC_WARMUP_CANDLES)
         geometry = reconstruct(candles, formed, asof, direction)
         structure = assess_displacement(candidate, candles, geometry)
         structure["luxalgo_structure"] = compare_choch(candidate, candles, geometry)

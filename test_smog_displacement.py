@@ -43,7 +43,7 @@ class StructureTests(unittest.TestCase):
         self.assertEqual(structure["proxy_impulse_start_bar_ms"], 4 * 60_000)
         self.assertFalse(structure["rule_4_confirmed"])
         self.assertFalse(structure["authoritative"])
-        fetch.assert_called_once_with("1m", 8 * 60_000)
+        fetch.assert_called_once_with("1m", 8 * 60_000, limit=720)
 
     def test_bearish_confirmed_break_and_same_displacement_fvg(self):
         with patch("smog_displacement.fetch_closed", return_value=SHORT):
