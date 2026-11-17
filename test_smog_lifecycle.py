@@ -2,9 +2,12 @@
 import unittest
 from decimal import Decimal
 from unittest.mock import patch
+from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 from smog_demo_execution import accepted_id, client_action_id, ExecutionBlocked
 from smog_lifecycle import _fill_satisfies_target, _price_at_four_r, _safe_tpsl
+from smog_lifecycle import manage_positions
 
 
 class DemoLifecycleTests(unittest.TestCase):
@@ -52,6 +55,77 @@ class DemoLifecycleTests(unittest.TestCase):
         self.assertFalse(_fill_satisfies_target(None, Decimal("1")))
         self.assertFalse(_fill_satisfies_target({"state": "filled"}, Decimal("1")))
         self.assertFalse(_fill_satisfies_target({"filledSize": "1"}, Decimal("0")))
+
+
+class ManagementTriggerTests(unittest.TestCase):
+    def _actions(self, direction="long", price="101", bos=False,
+                 partial_filled=False, be_moved=False):
+        entry = Decimal("100")
+        initial_stop = Decimal("99" if direction == "long" else "101")
+        position = {
+            "intent_id": 123,
+            "setup_id": "test-demo-only",
+            "direction": direction,
+            "entry_price": entry,
+            "initial_stop": initial_stop,
+            "current_stop": initial_stop,
+            "initial_size": Decimal("1"),
+            "partial_filled": partial_filled,
+            "be_moved": be_moved,
+            "bos_at": datetime.now(timezone.utc) if bos else None,
+            "bos_bar_ms": 1_794_900_000_000 if bos else None,
+            "opened_at": datetime.now(timezone.utc),
+        }
+        live = {
+            "positions": "1" if direction == "long" else "-1",
+            "markPrice": price,
+            "positionId": "demo-position",
+        }
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.execute.return_value.fetchall.return_value = [(123,)]
+        with (
+            patch("smog_lifecycle._load_position", return_value=position),
+            patch("smog_lifecycle._position", return_value=live),
+            patch("smog_lifecycle._safe_tpsl", return_value={"tpslId": "demo-stop"}),
+            patch("smog_lifecycle._reconcile_actions"),
+            patch("smog_lifecycle._bos_after_entry", return_value=None),
+            patch("smog_lifecycle._book_fills"),
+            patch("smog_lifecycle._new_trailing_fvg", return_value=None),
+            patch("smog_lifecycle.demo_instrument", return_value={
+                "tickSize": "0.01", "lotSize": "0.01",
+            }),
+            patch("smog_lifecycle._transmit") as transmit,
+        ):
+            manage_positions(lambda: connection)
+        return [call.args[2] for call in transmit.call_args_list]
+
+    def test_bos_moves_stop_without_reducing_position(self):
+        self.assertEqual(self._actions(price="101", bos=True), ["stop_breakeven"])
+
+    def test_four_r_takes_half_without_bos(self):
+        self.assertEqual(self._actions(price="104"), ["partial_close"])
+        self.assertEqual(self._actions(direction="short", price="96"), ["partial_close"])
+
+    def test_both_triggers_move_stop_first_then_take_half(self):
+        self.assertEqual(self._actions(price="104", bos=True), ["stop_breakeven"])
+        self.assertEqual(self._actions(price="104", bos=True, be_moved=True),
+                         ["partial_close"])
+
+    def test_short_bos_moves_stop_without_reducing_position(self):
+        self.assertEqual(self._actions(direction="short", price="99", bos=True),
+                         ["stop_breakeven"])
+
+    def test_breakeven_amendment_waits_for_valid_market_side(self):
+        self.assertEqual(self._actions(price="99.95", bos=True), [])
+        self.assertEqual(self._actions(direction="short", price="100.05", bos=True), [])
+
+    def test_existing_partial_can_still_move_to_breakeven_on_bos(self):
+        self.assertEqual(self._actions(price="101", bos=True, partial_filled=True),
+                         ["stop_breakeven"])
+
+    def test_bos_with_existing_breakeven_does_not_take_profit_before_four_r(self):
+        self.assertEqual(self._actions(price="103", bos=True, be_moved=True), [])
 
 
 if __name__ == "__main__":

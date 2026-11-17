@@ -473,8 +473,26 @@ def manage_positions(conn_factory):
                             WHERE intent_id=%s AND bos_at IS NULL
                         """, (bos[1], bos[0], intent_id))
                     pos = _load_position(conn_factory, intent_id)
+            # BOS confirms structure and moves the stop to breakeven.
+            # Profit-taking remains a separate 4R event.
+            if pos["bos_at"] is not None and not pos["be_moved"]:
+                entry = pos["entry_price"]
+                tick = _decimal(demo_instrument()["tickSize"])
+                entry = (entry / tick).to_integral_value(rounding=ROUND_DOWN) * tick
+                if direction == "short" and entry < pos["entry_price"]:
+                    entry += tick
+                better = entry > pos["current_stop"] if direction == "long" else entry < pos["current_stop"]
+                # The exchange cannot accept a stop on the wrong side of price.
+                in_profit = price > entry if direction == "long" else price < entry
+                if better and in_profit:
+                    _transmit(conn_factory, intent_id, "stop_breakeven",
+                              lambda: amend_protective_stop(
+                                  str(stop["tpslId"]), entry,
+                                  client_action_id(pos["setup_id"], "stop_breakeven")),
+                              field="tpslId", target=entry)
+                    continue
             four_r = _price_at_four_r(pos, price)
-            if (pos["bos_at"] is not None or four_r) and not pos["partial_filled"]:
+            if four_r and not pos["partial_filled"]:
                 lot = _decimal(demo_instrument()["lotSize"])
                 half = ((pos["initial_size"] / 2) / lot).to_integral_value(
                     rounding=ROUND_DOWN) * lot
@@ -485,20 +503,6 @@ def manage_positions(conn_factory):
                     continue
                 log.error("Partial exit impossible at demo contract lot size, intent=%s", intent_id)
                 continue
-            if pos["partial_filled"] and not pos["be_moved"]:
-                entry = pos["entry_price"]
-                tick = _decimal(demo_instrument()["tickSize"])
-                entry = (entry / tick).to_integral_value(rounding=ROUND_DOWN) * tick
-                if direction == "short" and entry < pos["entry_price"]:
-                    entry += tick
-                better = entry > pos["current_stop"] if direction == "long" else entry < pos["current_stop"]
-                if better:
-                    _transmit(conn_factory, intent_id, "stop_breakeven",
-                              lambda: amend_protective_stop(
-                                  str(stop["tpslId"]), entry,
-                                  client_action_id(pos["setup_id"], "stop_breakeven")),
-                              field="tpslId", target=entry)
-                    continue
             if pos["be_moved"] and pos["bos_bar_ms"] and (
                     (price - pos["entry_price"] if direction == "long"
                      else pos["entry_price"] - price)
