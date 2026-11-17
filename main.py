@@ -3,6 +3,7 @@ import hmac
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -18,7 +19,7 @@ from smog_adx_filter import evaluate_adx
 from smog_fvg_geometry import inspect_fvg
 from smog_blofin_auth import check_demo_auth
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 log = logging.getLogger('smog')
 
 EVENTS = {
