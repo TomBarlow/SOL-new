@@ -61,6 +61,10 @@ class Candidate:
                 "fvg_formed": self.fvg_alert_price,
             },
             "triggered_by_event_id": self.triggered_by_id,
+            "association_selection": {"version": 2,
+                                      "policy": "earliest_post_og_fvg_before_choch",
+                                      "candle_membership_verified": False,
+                                      "rule_4_authoritative": False},
             "asof_bar_time_ms": self.asof_bar_time_ms,
             "status": "UNVERIFIED",
             "execution_allowed": False,
@@ -70,6 +74,7 @@ class Candidate:
                 "Verify the bullish/bearish FVG was created by the displacement that makes the internal CHoCH; reject an unrelated same-direction gap",
                 "The three alerts appearing within 30 minutes is only a wake-up condition, not proof of structural association",
                 "Verify FVG boundaries and mitigation state, and wait for a pullback into this exact gap before entry",
+                "The selected earliest post-OG FVG is a candidate only, not proven to be part of the break displacement; use actual candle structure",
                 "If same-displacement membership or the internal break cannot be substantiated from closed candles, return WAIT or SKIP, never TAKE",
                 "For TAKE include rule_eval.fvg_choch_displacement with status PASS, choch_bar_ms and fvg_bar_ms equal to signal_bars, and a concrete candle-based evidence explanation",
                 "Check the canonical R4 50% depth against the actual CHoCH displacement swing anchors, not the OG-to-CHoCH range proxy",
@@ -81,7 +86,7 @@ class Candidate:
 
 
 def detect_candidates(events: Iterable[Event], window_ms: int = WINDOW_MS) -> list[Candidate]:
-    """Replay sorted events; wake once per unique OG/CHoCH/FVG triple.
+    """Replay delivered alerts and pair a single ordered gap with each CHoCH.
 
     Only *previously received* events can contribute to a candidate. FVG may
     arrive before or after CHoCH. Mitigation alerts do not identify individual
@@ -96,41 +101,51 @@ def detect_candidates(events: Iterable[Event], window_ms: int = WINDOW_MS) -> li
     seen_ids: set[int] = set()
     seen_keys: set[str] = set()
     candidates: list[Candidate] = []
-    for current in events:  # delivery order; don't assume bars arrive in order
+    for current in events:
         if current.id in seen_ids:
             continue
         seen_ids.add(current.id)
         history.append(current)
+        # Work from bar timestamps, not webhook delivery order. The OHLC
+        # signal time, not network arrival time, establishes causal order.
+        relevant = [e for e in history
+                    if abs(current.bar_time_ms - e.bar_time_ms) <= window_ms]
         for direction in ("long", "short"):
-            relevant = [e for e in history
-                        if abs(current.bar_time_ms - e.bar_time_ms) <= window_ms]
-            # Ignore events from future-dated bars, and only consider the
-            # current arrival when it completes the three-signal combination.
-            for e in reversed(relevant):
-                if e.event != FVG[direction]:
+            chochs = sorted((e for e in relevant if e.event == CHOCH[direction]),
+                            key=lambda e: (e.bar_time_ms, e.id), reverse=True)
+            for choch in chochs:
+                # The OG must precede the structure change. A CHoCH event
+                # cannot borrow a later OG, even if the alerts arrive late.
+                ogs = [e for e in relevant if e.event == OG[direction]
+                       and e.bar_time_ms <= choch.bar_time_ms]
+                if not ogs:
                     continue
-                ogs = [x for x in relevant if x.event == OG[direction]]
-                chochs = [x for x in relevant if x.event == CHOCH[direction]]
-                if not ogs or not chochs:
+                og = max(ogs, key=lambda e: (e.bar_time_ms, e.id))
+                fvgs = [e for e in relevant if e.event == FVG[direction]
+                        and og.bar_time_ms <= e.bar_time_ms <= choch.bar_time_ms]
+                if not fvgs:
                     continue
-                og, choch = ogs[-1], chochs[-1]
-                # This is a conservative wake-up only. Exact CHoCH
-                # displacement and FVG mitigation are verified downstream.
-                if max(og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms) - min(
-                        og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms) > window_ms:
+                if max(choch.bar_time_ms, og.bar_time_ms) - og.bar_time_ms > window_ms:
                     continue
-                if current.id not in (e.id, og.id, choch.id):
+                # The earliest gap of the post-OG displacement is normally
+                # deeper than subsequent gaps near the breakout. Still only
+                # a selection heuristic: candle geometry and exact same-leg
+                # membership must be independently verified downstream.
+                fvg = min(fvgs, key=lambda e: (e.bar_time_ms, e.id))
+                if current.id not in (og.id, choch.id, fvg.id):
                     continue
-                ids = (og.id, choch.id, e.id)
-                key = sha256(("%s|%s|%s|%s" % (direction, *ids)).encode()).hexdigest()
+                key = sha256(("%s|%s|%s|%s" %
+                              (direction, og.id, choch.id, fvg.id)).encode()).hexdigest()
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
                 candidates.append(Candidate(
-                    key, direction, *ids, current.id, max(og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms),
-                    og.bar_time_ms, choch.bar_time_ms, e.bar_time_ms,
-                    og.price, choch.price, e.price
+                    key, direction, og.id, choch.id, fvg.id, current.id,
+                    max(og.bar_time_ms, choch.bar_time_ms, fvg.bar_time_ms),
+                    og.bar_time_ms, choch.bar_time_ms, fvg.bar_time_ms,
+                    og.price, choch.price, fvg.price
                 ))
+                # At most one paid-review candidate per direction per new
+                # alert. Do not create dozens of alternative-gap reviews.
                 break
     return candidates
-

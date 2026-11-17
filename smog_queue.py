@@ -288,6 +288,47 @@ def learning_data(authorization: str | None = Header(default=None)):
 
 
 
+@router.get("/association-audit")
+def association_audit(authorization: str | None = Header(default=None)):
+    """Read-only selection and candle-association diagnostics, no trade approval."""
+    _auth(authorization)
+    with _db() as conn:
+        rows = conn.execute("""
+            SELECT
+              COALESCE(payload#>>'{association_selection,version}', 'legacy')
+                AS selection_version,
+              COALESCE(payload#>>'{choch_displacement_context,status}', 'NOT_ASSESSED')
+                AS structure_status,
+              COUNT(*)
+            FROM smog_tasks
+            GROUP BY 1,2
+        """).fetchall()
+        recent = conn.execute("""
+            SELECT
+              LEFT(candidate_key, 12),
+              payload#>>'{association_selection,policy}',
+              payload#>>'{choch_displacement_context,status}',
+              payload#>>'{choch_displacement_context,reason}',
+              status
+            FROM smog_tasks ORDER BY id DESC LIMIT 20
+        """).fetchall()
+    return {
+        "source": "railway_durable_candidate_queue",
+        "execution_rules_changed": False,
+        "structure_is_research_only": True,
+        "count_by_selection_and_structure": [
+            {"version": version, "structure": status, "count": count}
+            for version, status, count in rows
+        ],
+        "recent": [
+            {"setup_prefix": key, "selection": policy,
+             "structure_status": status, "reason": reason,
+             "queue_status": task_status}
+            for key, policy, status, reason, task_status in recent
+        ],
+    }
+
+
 @router.get("/r4-research")
 def r4_research(authorization: str | None = Header(default=None)):
     """No-inference research dashboard. Proxies are NEVER verified trading gates."""

@@ -12,7 +12,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from smog_adx_filter import evaluate_adx
-from smog_fvg_geometry import inspect_fvg
+from smog_displacement import inspect_candidate
 from smog_queue import enqueue_candidate
 
 log = logging.getLogger("smog.prefilter.retry")
@@ -48,22 +48,23 @@ def check_pending():
         asof_ms = candidate["asof_bar_time_ms"]
         latest_closed_ms = ((int(time.time() * 1000) // ONE_MINUTE_MS)
                             - 1) * ONE_MINUTE_MS
-        geometry = inspect_fvg(formed_bar_ms,
-                               max(asof_ms, latest_closed_ms),
-                               candidate["direction"])
+        geometry, displacement = inspect_candidate(candidate,
+                                                   max(asof_ms, latest_closed_ms))
         adx = (evaluate_adx(asof_ms)
                if previous["status"] == "UNVERIFIED" else previous)
         assessment = {**adx, "fvg_geometry": geometry,
+                      "displacement_context": displacement,
                       "recovery": "retried_after_candle_close"}
 
         if (adx["status"] == "PASS" and geometry["status"] == "VERIFIED"
                 and geometry["mitigated"] is False):
-            enriched = {**candidate, "adx_prefilter": adx, "fvg": geometry}
+            enriched = {**candidate, "adx_prefilter": adx, "fvg": geometry,
+                        "choch_displacement_context": displacement}
             # Queue before marking the audit resolved. A crash after enqueue
             # is safe because candidate_key is unique in smog_tasks.
             enqueue_candidate(enriched)
-            log.info("Recovered SMOG candidate=%s FVG=%s", key,
-                     geometry["identity"][:12])
+            log.info("Recovered SMOG candidate=%s FVG=%s structure=%s",
+                     key, geometry["identity"][:12], displacement.get("status"))
         if (adx["status"] != "UNVERIFIED"
                 and geometry["status"] != "UNVERIFIED"):
             log.info("Resolved SMOG prefilter candidate=%s adx=%s mitigated=%s",

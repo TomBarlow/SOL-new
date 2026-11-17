@@ -16,7 +16,7 @@ from smog_queue import router as smog_router, init_queue, enqueue_candidate
 from smog_events import router as smog_events_router
 from smog_orchestrator import Event, detect_candidates
 from smog_adx_filter import evaluate_adx
-from smog_fvg_geometry import inspect_fvg
+from smog_displacement import inspect_candidate
 from smog_blofin_auth import check_demo_auth
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
@@ -118,6 +118,12 @@ def startup():
     threading.Thread(target=run_r4_backfill,
                      args=(lambda: psycopg.connect(db_url(), connect_timeout=5),),
                      name="smog-r4-research", daemon=True).start()
+    # One-shot historical comparison of ordered selection against old
+    # candidate association. Only read-only DB work; never submits an order.
+    from smog_selection_audit import audit_selection
+    threading.Thread(target=audit_selection,
+                     args=(lambda: psycopg.connect(db_url(), connect_timeout=5),),
+                     name="smog-selection-audit", daemon=True).start()
     # A closed TradingView bar can precede BloFin's confirmed OHLC response.
     # Recover recently unverified candidates without blocking webhook replies.
     from smog_prefilter_retry import run_prefilter_retries
@@ -174,7 +180,6 @@ async def tradingview(request: Request):
                     WHERE bar_time BETWEEN %s AND %s
                     ORDER BY id
                 ''', (bar_time_ms - 30 * 60_000, bar_time_ms + 30 * 60_000)).fetchall()
-            event_times = {row[0]: row[2] for row in rows}
             events = [Event(*row) for row in rows if row[1] in {
                 'og_long', 'og_short', 'internal_bullish_choch',
                 'internal_bearish_choch', 'bullish_fvg_formed',
@@ -182,12 +187,10 @@ async def tradingview(request: Request):
                 'bearish_fvg_mitigated'}]
             for candidate in detect_candidates(events):
                 if candidate.triggered_by_id == inserted[0]:
-                    geometry = inspect_fvg(
-                        event_times[candidate.fvg_id],
-                        candidate.asof_bar_time_ms, candidate.direction
-                    )
+                    geometry, displacement = inspect_candidate(candidate.to_payload())
                     result = evaluate_adx(candidate.asof_bar_time_ms)
                     result["fvg_geometry"] = geometry
+                    result["displacement_context"] = displacement
                     with psycopg.connect(db_url(), connect_timeout=5) as audit_conn:
                         audit_conn.execute("""
                             INSERT INTO smog_adx_audit(candidate_key, candidate, assessment)
@@ -200,7 +203,13 @@ async def tradingview(request: Request):
                         enriched = candidate.to_payload()
                         enriched["adx_prefilter"] = result
                         enriched["fvg"] = geometry
-                        enqueue_candidate(enriched)
+                        enriched["choch_displacement_context"] = displacement
+                        if enqueue_candidate(enriched):
+                            log.info("SMOG_ASSOCIATION_QUEUED version=2 structure=%s "
+                                     "proxy_50=%s gap_before_choch_minutes=%s",
+                                     displacement.get("status"),
+                                     displacement.get("proxy_midpoint_beyond_50"),
+                                     (candidate.choch_bar_time_ms - candidate.fvg_bar_time_ms) // 60000)
                     else:
                         log.info("SMOG prefilter candidate=%s adx=%s fvg=%s reason=%s",
                                  candidate.key, result["status"],
