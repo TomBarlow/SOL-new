@@ -142,6 +142,14 @@ def _log_research_counts(conn_factory, completed):
                      evidence#>>'{sensitivity,50,disagreement}' = 'true')
             FROM smog_r4_replays
         """).fetchone()
+    with conn_factory() as conn:
+        reason_counts = conn.execute("""
+            SELECT COALESCE(evidence->>'reason', 'NONE'), COUNT(*)
+            FROM smog_r4_replays
+            WHERE evidence->>'status' != 'PROXY_OBSERVED'
+            GROUP BY 1 ORDER BY 2 DESC
+        """).fetchall()
+    log.info("SMOG_R4_UNVERIFIABLE_REASONS totals=%s", dict(reason_counts))
     log.info("SMOG_R4_BACKFILL processed=%s total=%s observed=%s "
              "og_proxy_50_pass=%s og_proxy_50_fail=%s "
              "pivot_proxy_50_pass=%s pivot_proxy_50_fail=%s "
