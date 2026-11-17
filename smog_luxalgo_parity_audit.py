@@ -14,6 +14,8 @@ def evaluate_choch_rows(rows, fetcher=fetch_closed, delay_seconds=0.15):
     """Assess recorded alerts using candles closed at each actual signal bar."""
     results = Counter()
     reasons = Counter()
+    mismatches = Counter()
+    mismatch_examples = []
     for event, bar_ms in rows:
         direction = "long" if event == "internal_bullish_choch" else "short"
         candidate = {"direction": direction,
@@ -24,12 +26,27 @@ def evaluate_choch_rows(rows, fetcher=fetch_closed, delay_seconds=0.15):
             results[outcome["status"]] += 1
             if outcome["status"] == "UNVERIFIABLE":
                 reasons[outcome.get("reason", "UNKNOWN")] += 1
+            elif outcome["status"] == "NO_MATCH":
+                seen = outcome.get("observed_internal_events_on_bar") or []
+                if any(item["direction"] == ("bullish" if direction == "long" else "bearish")
+                       and item["event"] == "BOS" for item in seen):
+                    reason = "BOS_INSTEAD_OF_CHOCH"
+                elif seen:
+                    reason = "OPPOSITE_INTERNAL_EVENT"
+                else:
+                    reason = "NO_INTERNAL_CROSS_ON_ALERT_BAR"
+                mismatches[reason] += 1
+                if len(mismatch_examples) < 8:
+                    mismatch_examples.append({"bar_ms": int(bar_ms),
+                                              "direction": direction, "reason": reason})
         except (ValueError, OSError, KeyError, TypeError, IndexError) as exc:
             results["UNVERIFIABLE"] += 1
             reasons[type(exc).__name__] += 1
         if delay_seconds:
             time.sleep(delay_seconds)
     return {"reviewed": len(rows), "outcomes": dict(results),
+            "mismatch_reasons": dict(mismatches),
+            "mismatch_examples": mismatch_examples,
             "unverifiable_reasons": dict(reasons)}
 
 
@@ -45,8 +62,10 @@ def audit_luxalgo_parity(conn_factory):
         """).fetchall()
     report = evaluate_choch_rows(rows)
     log.info("SMOG_LUXALGO_PARITY window_hours=48 sample_limit=100 "
-             "tv_choch=%s results=%s reasons=%s "
+             "tv_choch=%s results=%s reasons=%s mismatch_types=%s "
+             "mismatch_examples=%s "
              "model_tokens=0 orders_sent=0",
              report["reviewed"], report["outcomes"],
-             report["unverifiable_reasons"])
+             report["unverifiable_reasons"], report["mismatch_reasons"],
+             report["mismatch_examples"])
     return report

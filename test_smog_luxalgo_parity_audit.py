@@ -25,6 +25,8 @@ class ParityAuditTests(unittest.TestCase):
         self.assertEqual(report["outcomes"], {
             "MATCHED_CHOCH": 2, "NO_MATCH": 1, "UNVERIFIABLE": 1})
         self.assertEqual(report["unverifiable_reasons"], {"ValueError": 1})
+        self.assertEqual(report["mismatch_reasons"],
+                         {"OPPOSITE_INTERNAL_EVENT": 1})
         self.assertEqual(calls[-1], ("1m", 8 * 60_000))
 
 
