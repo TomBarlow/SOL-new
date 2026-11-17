@@ -75,3 +75,13 @@
 - Every expiry batch now emits one `SMOG_HERMES_QUEUE_STALL` warning with a breakdown of unclaimed and leased-but-unanswered tasks. This makes missing decisions visible promptly in Railway logs, ahead of the 50-settlement audit.
 - Passed 59 isolated tests, including four new consumer-health and expiry-warning checks. No demo or live orders were submitted for testing.
 
+
+## 2026-11-17 18:10 UTC — post-deployment runtime audit
+
+- Deployment `40de606d-4ba4-499b-bce6-fea8c57d5cb9` on commit `5cda416` remained SUCCESS. Railway CI ran 59 tests successfully. Runtime preflight confirmed the BloFin demo host, zero SOL-USDT positions, zero open orders, zero fills, zero TP/SL records, net/one-way position mode, cross margin and 3x leverage.
+- Between deployment at 17:27 UTC and 18:07 UTC, 21 TradingView/event-stream HTTP requests completed successfully. No worker exception, reconciliation error, stale order, unprotected position or exchange ambiguity appeared.
+- The new stall diagnostic recorded tasks 106, 107 and 108 expiring without any Hermes claim. A fourth candidate at 17:56 UTC passed the ADX prefilter, recovered exact bearish FVG geometry as verified and unmitigated within four seconds, entered the durable queue as task 109, received zero `/smog/next` claim and expired unclaimed at 18:07 UTC.
+- This repeated result localises the operational failure to the external Hermes decision consumer. Signal ingestion, FVG recovery, ADX screening, queue persistence and demo exchange authentication were functioning. No discretionary fallback decision or synthetic order was introduced.
+- The latest completed rolling batch through task ID 100 contains 50 UNDECIDED observations, four eligible Fibonacci proxy observations, one midpoint at/beyond the proxy 0.5 level, and zero actual closed demo trades. No win rate, realised R or P&L can be inferred. No strategy refinement was adopted from this batch.
+- Protective-stop and BOS/4R management code was inactive because no position was opened. Existing limits remain one SOL-USDT net cross position, 3x maximum leverage, $100 maximum notional and $1 maximum initial stop-risk.
+
