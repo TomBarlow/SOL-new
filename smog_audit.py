@@ -16,6 +16,61 @@ SHADOW_MINUTES = 60
 SETTLEMENT_MINUTES = 90
 
 
+def _fib_midpoint_context(candidate, candles):
+    """Measure a reproducible OG-to-CHoCH swing proxy for research only.
+
+    Alert prices are closes, so they cannot independently identify the true
+    structural swing anchors. This proxy is deliberately excluded from orders.
+    """
+    bars = candidate.get("signal_bars") or {}
+    fvg = candidate.get("fvg") or {}
+    direction = candidate.get("direction")
+    try:
+        og_ms = int(bars["og"])
+        choch_ms = int(bars["internal_choch"])
+        formed_ms = int(fvg["formation_bar_ms"])
+        lower = float(fvg["lower"])
+        upper = float(fvg["upper"])
+    except (KeyError, TypeError, ValueError):
+        return {"status": "UNVERIFIABLE", "reason": "MISSING_ANCHORS"}
+
+    if (direction not in ("long", "short") or fvg.get("status") != "VERIFIED"
+            or not og_ms <= formed_ms <= choch_ms or lower >= upper
+            or any(ms % 60_000 for ms in (og_ms, formed_ms, choch_ms))):
+        return {"status": "UNVERIFIABLE", "reason": "INVALID_SIGNAL_ORDER"}
+
+    impulse = [c for c in candles if og_ms <= c.start_ms <= choch_ms]
+    expected_bars = (choch_ms - og_ms) // 60_000 + 1
+    if len(impulse) != expected_bars or not impulse or (
+            impulse[0].start_ms != og_ms or impulse[-1].start_ms != choch_ms):
+        return {"status": "UNVERIFIABLE", "reason": "INCOMPLETE_IMPULSE"}
+
+    low = min(c.low for c in impulse)
+    high = max(c.high for c in impulse)
+    if high <= low:
+        return {"status": "UNVERIFIABLE", "reason": "ZERO_IMPULSE_RANGE"}
+
+    fvg_midpoint = (lower + upper) / 2
+    if not low <= fvg_midpoint <= high:
+        return {"status": "UNVERIFIABLE", "reason": "MIDPOINT_OUTSIDE_SWING"}
+    fib_half = (low + high) / 2
+    depth = ((high - fvg_midpoint) / (high - low) if direction == "long"
+             else (fvg_midpoint - low) / (high - low))
+    return {
+        "status": "PROXY_OBSERVED",
+        "method": "OG_to_CHoCH_closed_candle_extrema",
+        "not_authoritative_swing": True,
+        "swing_start_bar_ms": og_ms,
+        "swing_end_bar_ms": choch_ms,
+        "swing_low": round(low, 8),
+        "swing_high": round(high, 8),
+        "fib_half": round(fib_half, 8),
+        "fvg_midpoint": round(fvg_midpoint, 8),
+        "fvg_midpoint_retracement": round(depth, 5),
+        "at_or_beyond_half": depth >= 0.5,
+    }
+
+
 def init_audit(conn):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS smog_shadow_outcomes (
@@ -56,11 +111,12 @@ def _shadow(candidate):
                   "low": min(c.low for c in window)}
         if fvg.get("status") == "VERIFIED":
             lower, upper = float(fvg["lower"]), float(fvg["upper"])
-            touches = [c.start_ms for c in window if (
-                c.low <= upper if direction == "long" else c.high >= lower)]
+            touches = [c.start_ms for c in window
+                       if c.low <= upper and c.high >= lower]
             result["fvg_touched"] = bool(touches)
             result["first_fvg_touch_ms"] = touches[0] if touches else None
             result["fvg_identity"] = fvg.get("identity")
+            result["fib_midpoint_context"] = _fib_midpoint_context(candidate, candles)
         return result
     except Exception:
         return {"quality": "DATA_UNAVAILABLE", "shadow_only": True}
@@ -111,11 +167,16 @@ def settle_observations(conn_factory):
             return
         decisions = Counter((row[2] or {}).get("decision", "UNKNOWN") for row in pending)
         qualities = Counter((row[2] or {}).get("quality", "UNKNOWN") for row in pending)
+        fib_contexts = [(row[2] or {}).get("fib_midpoint_context") or {} for row in pending]
+        fib_observed = [f for f in fib_contexts if f.get("status") == "PROXY_OBSERVED"]
         real = [float(row[3]) for row in pending if row[3] is not None]
         metrics = {
             "source": "50_settled_setup_observations",
             "decisions": dict(decisions),
             "shadow_quality": dict(qualities),
+            "fib_proxy_observed_count": len(fib_observed),
+            "fib_proxy_midpoint_beyond_half_count": sum(
+                f["at_or_beyond_half"] for f in fib_observed),
             "actual_closed_trade_count": len(real),
             "actual_realized_pnl_usdt_ex_funding": round(sum(real), 8),
             "actual_profitable_count": sum(p > 0 for p in real),
