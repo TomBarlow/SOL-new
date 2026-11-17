@@ -206,8 +206,9 @@ async def tradingview(request: Request):
                         enriched["choch_displacement_context"] = displacement
                         if enqueue_candidate(enriched):
                             log.info("SMOG_ASSOCIATION_QUEUED version=2 structure=%s "
-                                     "proxy_50=%s gap_before_choch_minutes=%s",
+                                     "smc_luxalgo=%s proxy_50=%s gap_before_choch_minutes=%s",
                                      displacement.get("status"),
+                                     (displacement.get("luxalgo_structure") or {}).get("status"),
                                      displacement.get("proxy_midpoint_beyond_50"),
                                      (candidate.choch_bar_time_ms - candidate.fvg_bar_time_ms) // 60000)
                     else:

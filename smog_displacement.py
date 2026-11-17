@@ -1,12 +1,13 @@
 """Closed-candle CHoCH/FVG association evidence, never trade authorisation.
 
-The proprietary TradingView CHoCH alert contains no actual pivot/swing anchors.
-This module can test whether a plausible internal pivot was broken and whether
-the selected FVG formed after the ensuing local swing, but the result remains
-a labelled proxy and cannot serve as an authoritative R4 PASS or order gate.
+The open-source LuxAlgo SMC code provides the pivot rules, though its webhook
+does not send actual pivot/swing anchors. The original local-pivot proxy is
+preserved for audit comparability; an independent open-source SMC replay is
+now attached for timestamp agreement and swing-anchor research.
 """
 from smog_adx_filter import fetch_closed
 from smog_fvg_geometry import reconstruct
+from smog_luxalgo_structure import compare_choch
 
 MINUTE = 60_000
 
@@ -127,6 +128,7 @@ def inspect_candidate(candidate: dict, asof_bar_ms: int | None = None):
         candles = fetch_closed("1m", asof + MINUTE)
         geometry = reconstruct(candles, formed, asof, direction)
         structure = assess_displacement(candidate, candles, geometry)
+        structure["luxalgo_structure"] = compare_choch(candidate, candles, geometry)
         return geometry, structure
     except (ValueError, OSError, KeyError, TypeError, IndexError) as exc:
         reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
