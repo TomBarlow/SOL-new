@@ -124,6 +124,12 @@ def startup():
     threading.Thread(target=audit_selection,
                      args=(lambda: psycopg.connect(db_url(), connect_timeout=5),),
                      name="smog-selection-audit", daemon=True).start()
+    # Compare LuxAlgo's published SMC CHoCH rules with 48h of genuine TV
+    # alerts. The audit uses closed candles and zero inference or orders.
+    from smog_luxalgo_parity_audit import audit_luxalgo_parity
+    threading.Thread(target=audit_luxalgo_parity,
+                     args=(lambda: psycopg.connect(db_url(), connect_timeout=5),),
+                     name="smog-luxalgo-parity-audit", daemon=True).start()
     # A closed TradingView bar can precede BloFin's confirmed OHLC response.
     # Recover recently unverified candidates without blocking webhook replies.
     from smog_prefilter_retry import run_prefilter_retries

@@ -23,6 +23,7 @@ The user's SMC screenshot explicitly shows **Fair Value Gaps unchecked**. Existi
 - Railway receiver logs "SMOG_ASSOCIATION_QUEUED" for new v2 queues. This contains selection version, proxy assessment, new LuxAlgo replay status, and FVG timing.
 - GET /smog/association-audit (bearer-authenticated) reports association-selection and structure-status distributions, plus recent queue status with short IDs.
 - At receiver startup, the one-shot "SMOG_SELECTION_REPLAY" compares the prior 48h of stored OG/CHoCH/FVG alerts against the new ordered matching algorithm and classifies historical missing/invalid signal bars. **No model wakes** and **no order submissions** are caused by this replay.
+- Also at startup, a bounded background `SMOG_LUXALGO_PARITY` audit compares up to 100 genuine internal CHoCH alerts received in the last 48h against the reconstructed SMC rules using only historical closed 1m candles. It reports `MATCHED_CHOCH`, `NO_MATCH`, and `UNVERIFIABLE` totals without writing to the trade ledger, placing orders or waking Hermes.
 - The separate /smog/r4-research continues to label its varying swing-anchor calculations as *research proxies*. Comparisons on old tasks remain historical and should not be treated as a validated signal-rule experiment.
 
 ## Remaining parity and data limitations
